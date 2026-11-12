@@ -9,7 +9,7 @@ Hostname (mDNS, before static IP is set) : raspberrypi.local
 SSH                                       : enabled (scripts/configure-network.sh)
 
   NIC 1 - OT / PLC network (onboard Ethernet, "end0" on Pi 5 / "eth0" on older Pi):
-    Static IP      : 192.168.1.50
+    Static IP      : 192.168.1.40
     Subnet mask    : /24 (255.255.255.0)
     Gateway        : (none set - isolated OT segment by default)
     Set by         : scripts/configure-network.sh (default SENTINEL_IP)

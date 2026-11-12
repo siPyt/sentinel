@@ -42,7 +42,7 @@ re-flash the SD card with Raspberry Pi Imager and set a username/password +
 enable SSH under the advanced options (gear icon) before writing.
 
 Once you have a shell on the Pi, give it the fixed IP this project expects
-(defaults to `192.168.1.50/24`, matching the PLC subnet in
+(defaults to `192.168.1.40/24`, matching the PLC subnet in
 [config.example.yaml](config.example.yaml)):
 
 ```bash

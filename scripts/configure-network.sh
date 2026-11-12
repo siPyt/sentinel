@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-SENTINEL_IP="${SENTINEL_IP:-192.168.1.50/24}"
+SENTINEL_IP="${SENTINEL_IP:-192.168.1.40/24}"
 SENTINEL_GATEWAY="${SENTINEL_GATEWAY:-}"   # leave unset on an isolated OT segment with no router
 SENTINEL_DNS="${SENTINEL_DNS:-}"           # e.g. "1.1.1.1 8.8.8.8"; leave unset if not needed
 SENTINEL_CONN_NAME="${SENTINEL_CONN_NAME:-sentinel-static}"
