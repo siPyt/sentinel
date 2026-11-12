@@ -24,6 +24,39 @@ Allen-Bradley RSLogix 5000 v17 PLC --(EtherNet/IP CIP)--> Raspberry Pi 5 --(BACn
 
 ## Getting started
 
+### First network access to the Pi
+
+A freshly flashed Raspberry Pi OS boots with SSH enabled and your chosen user
+*only if* you set that up in Raspberry Pi Imager's advanced options (gear icon)
+before flashing. If so, with an Ethernet cable connected it will pick up a DHCP
+address automatically -- no action needed to get *an* IP, you just need to find it:
+
+```powershell
+ping raspberrypi.local   # mDNS hostname, works out of the box on most networks
+ssh <your-username>@raspberrypi.local
+```
+
+If that doesn't resolve, check your router's DHCP client list for a device
+named `raspberrypi`. If SSH was never enabled and there's no monitor attached,
+re-flash the SD card with Raspberry Pi Imager and set a username/password +
+enable SSH under the advanced options (gear icon) before writing.
+
+Once you have a shell on the Pi, give it the fixed IP this project expects
+(defaults to `192.168.1.50/24`, matching the PLC subnet in
+[config.example.yaml](config.example.yaml)):
+
+```bash
+sudo ./scripts/configure-network.sh
+```
+
+Override `SENTINEL_IP` / `SENTINEL_GATEWAY` env vars first if your real site
+network differs -- see the comments at the top of
+[scripts/configure-network.sh](scripts/configure-network.sh). When you later add
+the second (BAS/BACnet-side) NIC from the dual-homed design, run it again with
+`SENTINEL_IP` set to that NIC's address (e.g. matching `bacnet.bind_address`).
+
+### Install the project
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -e .
