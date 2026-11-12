@@ -1,0 +1,12 @@
+[Unit]
+Description=Force stable 100Mbps/Full/EEE-off on eth0 after every link-up event
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/eth0-stable-watch.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

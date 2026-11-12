@@ -1,0 +1,51 @@
+PREDATOR PI - NETWORK PROBLEM FIXES (summary)
+Static IP: 192.168.1.50/24, direct Ethernet cable to the PC, no DHCP server on that link.
+
+1. STATIC IP INSTEAD OF DHCP (BOOT CONFIG)
+   Problem: Pi's Ethernet was DHCP-only. On a direct point-to-point cable with no DHCP
+   server, it was never reliably reachable.
+   Fix: Edited the microSD boot partition's cloud-init network-config to set eth0 static
+   192.168.1.50/24 (dhcp4/dhcp6 off).
+
+2. GIGABIT AUTO-NEGOTIATION FAILURE ON THE PI<->PC LINK
+   Problem: The Pi 5's NIC (Broadcom BCM54213PE) and the PC's Intel I219-LM port/cable
+   could not reliably negotiate 1000BASE-T - the link would train at 1Gbps then
+   immediately drop, before settling at 100Mbps on its own.
+   Fix: Added /etc/NetworkManager/dispatcher.d/50-eth0-stable (matched to a known-stable
+   sister Pi) that forces, on every up/hostname/dhcp4-change/connectivity-change event:
+       ethtool -s eth0 autoneg on advertise 0x008   (100baseT-Full only, never 1000baseT)
+       ethtool --set-eee eth0 eee off               (disable Energy-Efficient-Ethernet)
+
+3. THE DISPATCHER SCRIPT "FELL OFF" AFTER SILENT PHY-ONLY FLAPS
+   Problem: NetworkManager's dispatcher only reruns on its own recognized events. The
+   Pi's raw link flaps weren't triggering any of those events, so eth0 drifted back to
+   unstable gigabit autonegotiation every few minutes.
+   Fix: Added a standalone watcher that reacts to the kernel's own link-state events
+   instead of NetworkManager's:
+       /usr/local/sbin/eth0-stable-watch.sh    - loops on `ip monitor link`, re-applies
+                                                  the autoneg/EEE fix every time eth0
+                                                  reports "state UP"
+       /etc/systemd/system/eth0-stable-watch.service - Restart=always, enabled + started
+   Also fixed a Windows CRLF line-ending bug in the script that broke its #!/bin/sh
+   shebang (sed -i 's/\r$//'). Tracked in the repo: scripts/eth0-stable-watch.sh,
+   systemd/eth0-stable-watch.service.
+
+4. ROOT CAUSE OF THE REAL MULTI-MINUTE OUTAGES: eth0 WAS STILL SET TO DHCP UNDERNEATH
+   Problem: The NetworkManager connection profile "netplan-eth0" had ipv4.method=auto
+   (DHCP) as its PRIMARY method, with the static 192.168.1.50 address only layered on
+   top as an extra address. With no DHCP server on the direct cable, NetworkManager
+   retried DHCP every ~45 seconds, timed out, and tore down the whole connection each
+   time - this was the dominant cause of the long drops, worse than the gigabit/EEE
+   issue above.
+   Fix:
+       sudo nmcli connection modify netplan-eth0 ipv4.method manual \
+         ipv4.addresses 192.168.1.50/24 ipv6.method link-local
+       sudo nmcli connection up netplan-eth0
+   Verified: ipv4.method is now "manual", the connection activates cleanly in under
+   0.2s, and it stays connected with no further ip-config failures.
+
+RESULT: all four fixes are deployed and verified on the Pi (predator, 192.168.1.50).
+Items 2-3 keep the physical link at a safe, stable 100Mbps/Full/EEE-off; item 4 stopped
+NetworkManager from repeatedly trying and failing DHCP on top of that.
+
+(Compiled from sofar.txt in the predator repo, which has the full troubleshooting history.)

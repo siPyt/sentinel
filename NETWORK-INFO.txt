@@ -5,38 +5,43 @@ if you change any of these values in config.yaml or on the Pi itself.
 
 RASPBERRY PI 5
 --------------
-Hostname (mDNS, before static IP is set) : raspberrypi.local
-SSH                                       : enabled (scripts/configure-network.sh)
+Hostname                                 : setinel
+SSH                                       : enabled, password auth (scripts/configure-network.sh)
 
-  NIC 1 - OT / PLC network (onboard Ethernet, "end0" on Pi 5 / "eth0" on older Pi):
-    Static IP      : 192.168.1.40
+  NIC 1 - OT / PLC network (onboard Ethernet, "eth0" on this Pi):
+    Static IP      : 192.168.1.40   [VERIFIED on real hardware]
     Subnet mask    : /24 (255.255.255.0)
-    Gateway        : (none set - isolated OT segment by default)
+    Gateway        : none (isolated OT segment, direct cable to PC)
     Set by         : scripts/configure-network.sh (default SENTINEL_IP)
+    Link stability : forced 100Mb/s Full-Duplex, EEE disabled [VERIFIED]
+                     (Pi 5's onboard NIC would otherwise flap trying to hold
+                     1000BASE-T on this direct cable -- see
+                     networkmanager-dispatcher.d/50-eth0-stable,
+                     scripts/eth0-stable-watch.sh, and
+                     systemd/eth0-stable-watch.service)
 
-  NIC 2 - BAS / BACnet network (add when going dual-homed, e.g. USB-Ethernet):
-    Static IP      : 192.168.10.50
+  NIC 2 - BAS / BACnet network (not yet added - single NIC for now):
+    Static IP      : 192.168.10.50  [NOT YET APPLIED]
     Subnet mask    : /24 (255.255.255.0)
     Gateway        : (none set - set SENTINEL_GATEWAY if this VLAN has a router)
     Set by         : scripts/configure-network.sh, run again with
-                     SENTINEL_IP=192.168.10.50/24
+                     SENTINEL_IP=192.168.10.50/24 once the 2nd NIC is attached
 
 PLCs (Allen-Bradley RSLogix 5000 v17, EtherNet/IP CIP, TCP port 44818)
 -----------------------------------------------------------------------
-  plc1  CR1_WEST   192.168.1.10   slot 0
-  plc2  CR1_EAST   192.168.1.11   slot 0
+  plc1  CR1_WEST   192.168.1.10   slot 0   [placeholder - not yet confirmed]
+  plc2  CR1_EAST   192.168.1.11   slot 0   [placeholder - not yet confirmed]
 
 BACNET/IP SERVER (Siemens Apogee / Insight BMS side, UDP port 47808)
 -----------------------------------------------------------------------
-  Bind address   : 192.168.10.50/24:47808
+  Bind address   : 192.168.10.50/24:47808   [not reachable yet - needs NIC 2]
   Device ID      : 1001
   Device name    : AirlockSentinel-CR1
   Vendor ID      : 999 (ASHRAE demo ID - replace for production)
 
 NOTES
 -----
-- All values above are the current defaults from config.example.yaml /
-  scripts/configure-network.sh, not yet confirmed against a real site network.
-  Update this file (and config.yaml, and SENTINEL_IP/SENTINEL_GATEWAY when
-  re-running the script) once real site IPs/subnets are known.
+- PLC IPs and the BACnet bind address are still placeholders from
+  config.example.yaml, not yet confirmed against real site hardware.
+  Update this file (and config.yaml) once real PLC IPs are known.
 - Do not put passwords, Wi-Fi keys, or other credentials in this file.

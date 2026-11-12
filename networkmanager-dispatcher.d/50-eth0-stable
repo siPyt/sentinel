@@ -1,0 +1,28 @@
+#!/bin/bash
+# Deployed to: /etc/NetworkManager/dispatcher.d/50-eth0-stable  (on the Pi)
+#
+# The Raspberry Pi 5's onboard NIC (Broadcom BCM54213PE) can fail to reliably
+# hold a 1000BASE-T auto-negotiation on a direct point-to-point link to some
+# PC NIC/cable combinations (observed with an Intel I219-LM port): the link
+# trains at 1Gbps then immediately drops, before settling at 100Mbps on its
+# own. Forcing 100baseT-Full only (never advertising 1000baseT) and disabling
+# Energy-Efficient-Ethernet avoids the unstable renegotiation entirely.
+#
+# NetworkManager calls every script in dispatcher.d with "$1 $2" = <interface>
+# <action> on each network event (up, down, hostname, dhcp4-change,
+# connectivity-change, ...). Install with: chmod 755 + place in
+# /etc/NetworkManager/dispatcher.d/.
+#
+# NOTE: if you edit this on Windows, strip CRLF line endings before deploying
+# (sudo sed -i 's/\r$//' <path>) -- a CRLF shebang silently breaks this script.
+IFACE="$1"
+ACTION="$2"
+
+if [ "$IFACE" = "eth0" ]; then
+    case "$ACTION" in
+        up|hostname|dhcp4-change|connectivity-change)
+            ethtool -s eth0 autoneg on advertise 0x008
+            ethtool --set-eee eth0 eee off
+            ;;
+    esac
+fi
