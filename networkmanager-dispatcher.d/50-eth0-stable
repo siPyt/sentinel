@@ -15,14 +15,28 @@
 #
 # NOTE: if you edit this on Windows, strip CRLF line endings before deploying
 # (sudo sed -i 's/\r$//' <path>) -- a CRLF shebang silently breaks this script.
+#
+# Uses the absolute path to ethtool (/usr/sbin/ethtool) rather than relying on
+# PATH: NetworkManager's dispatcher environment does not reliably include
+# /sbin:/usr/sbin, and a bare `ethtool` call can silently fail with "command
+# not found" there. Logged via `logger` so this is verifiable in
+# `journalctl -t eth0-stable-dispatch` instead of being assumed.
 IFACE="$1"
 ACTION="$2"
+ETHTOOL="/usr/sbin/ethtool"
 
 if [ "$IFACE" = "eth0" ]; then
     case "$ACTION" in
         up|hostname|dhcp4-change|connectivity-change)
-            ethtool -s eth0 autoneg on advertise 0x008
-            ethtool --set-eee eth0 eee off
+            out1=$("$ETHTOOL" -s eth0 autoneg on advertise 0x008 2>&1); rc1=$?
+            out2=$("$ETHTOOL" --set-eee eth0 eee off 2>&1); rc2=$?
+            [ -n "$out1" ] && logger -t eth0-stable-dispatch "$out1"
+            [ -n "$out2" ] && logger -t eth0-stable-dispatch "$out2"
+            if [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; then
+                logger -t eth0-stable-dispatch "applied autoneg/EEE fix to eth0 (action=$ACTION)"
+            else
+                logger -t eth0-stable-dispatch "FAILED to apply autoneg/EEE fix to eth0 (action=$ACTION, rc1=$rc1 rc2=$rc2)"
+            fi
             ;;
     esac
 fi
