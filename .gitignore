@@ -8,3 +8,6 @@ dist/
 
 # Site-specific secrets/config -- commit config.example.yaml only.
 config.yaml
+
+# Local-only credentials reference -- never commit login details.
+LOGIN-INFO-local-only.txt
