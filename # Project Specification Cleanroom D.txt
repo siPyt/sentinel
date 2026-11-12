@@ -1,0 +1,56 @@
+# Project Specification: Cleanroom Door State Bridge (`airlock-sentinel`)
+**Architecture:** Allen-Bradley RSLogix 5000 v17 PLC --(EtherNet/IP CIP)--> Raspberry Pi 5 --(BACnet/IP)--> Siemens Apogee / Insight BMS
+
+## 1. Objective
+Build a production-grade, fault-tolerant Python 3.11+ daemon running on 64-bit Raspberry Pi OS that continuously polls cleanroom door position tags directly from Allen-Bradley RSLogix 5000 v17 PLCs over EtherNet/IP (TCP 44818) and exposes those door states to a Siemens Apogee / Insight BMS.
+
+## 2. Technical Stack & Protocol Constraints
+
+### A. Southbound: Direct Allen-Bradley v17 Polling (`pylogix`)
+- **Library:** MUST use `pylogix` (`from pylogix import PLC`). Do NOT use `pycomm3`—the target PLCs run legacy RSLogix 5000 v17 firmware (e.g., 1769-L32E / 1756 series) with ~500-byte standard CIP packet limits and no v21+ symbol-instance browsing.
+- **Connection & CIP Conservation:**
+  - Older v17 Ethernet modules (like the 1769-L32E) have strict TCP/CIP connection limits. Reuse a single persistent `PLC()` session per controller IP rather than opening/closing TCP sockets every poll cycle.
+  - Configure `comm.IPAddress`, `comm.ProcessorSlot` (default `0` for CompactLogix), and `comm.SocketTimeout = 2.0`.
+  - Do NOT call `GetTagList()` on startup; read configured symbolic tags directly.
+- **Batch Multi-Service Reads:**
+  - Group all configured tags per PLC into a single list call: `responses = comm.Read(tag_list)`. `pylogix` automatically packs these into CIP Multi-Service requests within v17 packet limits.
+  - Support Controller-scoped tags (`Door_101_DPS`), Program-scoped tags (`Program:MainProgram.Door_101_DPS`), and direct bit-of-word / local I/O syntax (`Local:1:I.Data.0`).
+- **Strict Response Validation:**
+  - Inspect every `Response` object in the returned list: only treat data as valid when `resp.Status == "Success"` and `resp.Value is not None`.
+  - If an exception occurs or `resp.Status != "Success"`, cleanly call `comm.Close()`, mark that PLC's downstream BMS points as faulted, and reconnect using bounded exponential backoff (`1s -> 2s -> 5s -> 10s max`).
+
+### B. Northbound: Siemens Apogee / Insight BMS Server (`bacpypes3`)
+[NOTE: Change this section to Modbus RTU/TCP via `pymodbus` ONLY if feeding an intermediate serial/FLN translator instead of BACnet/IP]
+- **Library:** `bacpypes3` (async Python BACnet/IP stack; avoid `BAC0` heavyweight notebook dependencies).
+- **Network Binding:** Bind explicitly to a configured local IP/CIDR (`bms_bind_address`, e.g., `192.168.10.50/24:47808`) so dual-homed Raspberry Pi setups (OT Ethernet + BAS VLAN/NIC) never broadcast `I-Am` packets onto the wrong interface.
+- **BACnet Object Mapping:**
+  - Expose each cleanroom door as a standard BACnet `BinaryInputObject` (`BI`):
+    - `presentValue`: `active` (`1` = Door Open) / `inactive` (`0` = Door Closed).
+    - `polarity` / `invert_logic`: Support software inversion in `config.yaml` because fail-safe cleanroom magnetic switches are typically Normally Closed (`PLC 1 = Closed`, `PLC 0 = Open`).
+    - `statusFlags` & `reliability`: **CRITICAL GMP REQUIREMENT.** Never freeze stale "Closed" values if a PLC drops offline. When southbound CIP reads fail for `>= fault_threshold_polls` (default `3`), set `reliability = "communication-failure"` and update `statusFlags` (`fault = True`) on every `BI` belonging to that PLC. Clear automatically upon valid CIP recovery.
+  - Expose one `BinaryInputObject` per PLC for `PLC_<NAME>_COMM_OK` (`active` = Healthy, `inactive` = Comm Fault).
+  - Expose one `AnalogValueObject` (`AV`, instance `999`) as a `HEARTBEAT_COUNTER` incrementing `0..999` every second so Siemens PPCL logic can detect a frozen daemon.
+  - Support `Who-Is` / `I-Am`, `ReadProperty`, `ReadPropertyMultiple` (`RPM`), and `SubscribeCOV` (Change of Value).
+
+## 3. Cleanroom State Conditioning (`state_manager.py`)
+- **Pulse Stretching (`min_open_hold_ms`):** Siemens Insight/Apogee trunks (especially if bridged through BACnet-to-FLN routers) may poll every 5–15 seconds. Implement a configurable `min_open_hold_ms` (default `5000ms`): if a door opens for even 500ms and closes immediately, hold the northbound BMS `DOOR OPEN` state active for at least `5000ms` so slow BMS polls never miss a brief cleanroom breach.
+- **Debounce (`debounce_ms`):** Optional `0–500ms` filter if mechanical reed switches chatter on door latch slam.
+
+## 4. Configuration (`config.yaml` + `Pydantic`)
+Validate `config.yaml` at startup with `pydantic` v2:
+- `service`: `poll_interval_ms` (default `500`), `fault_threshold_polls` (default `3`), `log_level`.
+- `bacnet`: `device_id`, `device_name`, `vendor_id` (`999`), `bind_address` (`IP/mask:port`).
+- `plcs`: list of `{ id, name, ip_address, slot, timeout_sec, doors: [ { tag, bacnet_instance, object_name, description, invert_logic, min_open_hold_ms } ] }`.
+
+## 5. Raspberry Pi Reliability & Operations
+- **Flash/SD Wear Protection:** Log ONLY state transitions (`OPENED`, `CLOSED`), comm loss/recovery events, and startup/shutdown—zero per-poll disk writes. Output structured logs to `stdout` for `systemd-journald`.
+- **Graceful Shutdown:** Trap `SIGINT` and `SIGTERM` to close all active `pylogix` CIP sessions cleanly (preventing orphaned CIP connections on v17 PLCs that take 60+ seconds to time out on the controller) and release UDP `47808`.
+- **CLI Modes:**
+  - `python -m airlock_sentinel --config config.yaml` (Normal production daemon)
+  - `python -m airlock_sentinel --config config.yaml --plc-test` (Southbound-only live terminal table showing raw PLC tag values, CIP read latency in ms, and inverted door states—for commissioning before BMS is connected).
+
+## 6. Deliverables to Generate
+1. Clean project layout (`pyproject.toml` / `requirements.txt`, `config.example.yaml`, `src/airlock_sentinel/...`).
+2. Complete, production-ready code for `config.py`, `plc_poller.py`, `state_manager.py`, `bacnet_server.py`, and `main.py` (run blocking `pylogix` calls inside `asyncio.to_thread` or a dedicated thread pool so the async `bacpypes3` event loop never blocks).
+3. Hardened `systemd` unit file (`airlock-sentinel.service`) running as a non-root user with automatic restart.
+4. Step-by-step commissioning checklist (testing PLC reads via `--plc-test` and verifying BACnet points/COV via YABE).

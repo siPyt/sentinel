@@ -1,0 +1,6 @@
+# Pinned to the versions validated during development of this project.
+# Equivalent to the dependencies in pyproject.toml; use either one.
+pylogix==1.1.7
+bacpypes3==0.0.110
+pydantic==2.14.3
+PyYAML==6.0.3

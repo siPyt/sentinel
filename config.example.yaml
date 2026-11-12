@@ -1,0 +1,53 @@
+# Example configuration for sentinel (airlock-sentinel cleanroom door bridge).
+# Copy to config.yaml and adjust IPs, tags, and BACnet instances for your site.
+
+service:
+  poll_interval_ms: 500 # southbound CIP poll period
+  fault_threshold_polls: 3 # consecutive failed polls before a PLC's doors go unreliable
+  log_level: INFO
+
+bacnet:
+  device_id: 1001
+  device_name: "AirlockSentinel-CR1"
+  vendor_id: 999 # ASHRAE demo vendor ID; replace with your registered vendor ID for production
+  # Bind explicitly to the BAS-side NIC/VLAN on a dual-homed Pi so I-Am/COV
+  # never broadcast onto the OT/PLC network.
+  bind_address: "192.168.10.50/24:47808"
+
+plcs:
+  - id: plc1
+    name: "CR1_WEST"
+    ip_address: "192.168.1.10"
+    slot: 0 # 0 for CompactLogix (e.g. 1769-L32E); adjust for ControlLogix chassis slot
+    timeout_sec: 2.0
+    comm_ok_bacnet_instance: 900 # PLC_CR1_WEST_COMM_OK BinaryInputObject instance
+    doors:
+      - tag: "Door_101_DPS"
+        bacnet_instance: 1
+        object_name: "CR1_DOOR_101"
+        description: "Cleanroom 1 West Airlock Door 101"
+        invert_logic: true # typical NC magnetic switch: PLC 1 = Closed, PLC 0 = Open
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Program:MainProgram.Door_102_DPS"
+        bacnet_instance: 2
+        object_name: "CR1_DOOR_102"
+        description: "Cleanroom 1 West Airlock Door 102"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+
+  - id: plc2
+    name: "CR1_EAST"
+    ip_address: "192.168.1.11"
+    slot: 0
+    timeout_sec: 2.0
+    comm_ok_bacnet_instance: 901 # PLC_CR1_EAST_COMM_OK BinaryInputObject instance
+    doors:
+      - tag: "Local:1:I.Data.0" # direct bit-of-word / local digital input syntax
+        bacnet_instance: 3
+        object_name: "CR1_DOOR_201"
+        description: "Cleanroom 1 East Airlock Door 201"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 0

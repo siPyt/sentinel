@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel"
+version = "0.1.0"
+description = "Cleanroom Door State Bridge: Allen-Bradley RSLogix 5000 v17 PLC (EtherNet/IP CIP) to Siemens Apogee/Insight BMS (BACnet/IP)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pylogix>=1.0.5",
+    "bacpypes3>=0.0.102",
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+sentinel = "sentinel.main:cli_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

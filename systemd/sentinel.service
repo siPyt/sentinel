@@ -1,0 +1,62 @@
+# sentinel.service -- Cleanroom Door State Bridge (airlock-sentinel)
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin sentinel
+#   sudo mkdir -p /opt/sentinel
+#   sudo cp -r . /opt/sentinel && cd /opt/sentinel
+#   sudo python3 -m venv .venv
+#   sudo ./.venv/bin/pip install -e .
+#   sudo cp config.example.yaml config.yaml   # then edit config.yaml for the site
+#   sudo chown -R sentinel:sentinel /opt/sentinel
+#   sudo cp systemd/sentinel.service /etc/systemd/system/sentinel.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sentinel.service
+#
+# Logs: journalctl -u sentinel.service -f
+
+[Unit]
+Description=sentinel - Cleanroom Door State Bridge (Allen-Bradley CIP -> BACnet/IP)
+Documentation=file:///opt/sentinel/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=sentinel
+Group=sentinel
+WorkingDirectory=/opt/sentinel
+ExecStart=/opt/sentinel/.venv/bin/python -m sentinel --config /opt/sentinel/config.yaml
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# Logging: stdout/stderr only, captured by systemd-journald (see spec section 5 --
+# the daemon itself writes zero per-poll data to disk to protect SD card flash wear).
+StandardOutput=journal
+StandardError=journal
+
+# --- Security hardening (non-root, minimal privilege) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
