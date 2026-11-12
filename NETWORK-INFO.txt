@@ -27,10 +27,36 @@ SSH                                       : enabled, password auth (scripts/conf
     Set by         : scripts/configure-network.sh, run again with
                      SENTINEL_IP=192.168.10.50/24 once the 2nd NIC is attached
 
+  wlan0 - incidental Wi-Fi, NOT part of the production design:
+    Status         : connected via DHCP (10.170.16.x/22), SSID is a guest
+                     network with a click-through "Accept" portal.
+    KNOWN ISSUE    : the portal has not been accepted for this device, so
+                     wlan0 has link-layer connectivity but no real internet
+                     access -- `apt-get update`/`install` over wlan0 fails
+                     with signature/hash-mismatch errors (portal intercepting
+                     HTTP with its own page instead of the real content).
+                     NOT FIXED. To get real internet over wlan0: open a
+                     browser on this device's session (e.g. via VNC) and
+                     accept the portal, or just don't rely on wlan0 for
+                     internet -- it is not needed for SSH, static-IP, link
+                     stability, or VNC (wayvnc), which all work already
+                     without it. Recommend disabling wlan0 before go-live.
+
 PLCs (Allen-Bradley RSLogix 5000 v17, EtherNet/IP CIP, TCP port 44818)
 -----------------------------------------------------------------------
   plc1  CR1_WEST   192.168.1.10   slot 0   [placeholder - not yet confirmed]
   plc2  CR1_EAST   192.168.1.11   slot 0   [placeholder - not yet confirmed]
+
+VNC REMOTE DESKTOP (wayvnc, over eth0 static IP)
+-----------------------------------------------------------------------
+  Address        : 192.168.1.40:5900
+  Server         : wayvnc (not TigerVNC/RealVNC -- this Pi runs the labwc
+                   Wayland compositor, not X11; raspi-config enables wayvnc
+                   automatically for this. RealVNC package is present but
+                   unused/disabled -- it can't find an X server to serve.)
+  Auth           : PAM (your real Linux login: admin / see
+                   LOGIN-INFO-local-only.txt), NOT a separate VNC password
+  Service        : systemctl status wayvnc.service (active, enabled)
 
 BACNET/IP SERVER (Siemens Apogee / Insight BMS side, UDP port 47808)
 -----------------------------------------------------------------------
