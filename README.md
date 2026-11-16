@@ -132,6 +132,18 @@ python -m sentinel --config config.yaml --log-only   # Excel event log only, no 
 Omit `--log-only` to run the BACnet bridge and the event log together. Under systemd,
 create the log folder as described in [systemd/sentinel.service](systemd/sentinel.service).
 
+## Live cockpit
+
+Sentinel serves a read-only status page on the Pi itself (`http://127.0.0.1:8080/`,
+loopback only, configured by the `dashboard:` section). It shows PLC online/offline,
+every door as a CLOSED / OPEN / LEFT OPEN - TIMED OUT / UNKNOWN tile grouped by
+airlock, a "needs attention" box, recent events and system health. It reads sentinel's
+in-memory state, so it opens **no extra PLC connection** and cannot write to the PLC
+or the logs. On the Pi, use the **Sentinel Cockpit** desktop icon.
+
+`python -m sentinel --config config.yaml --demo` serves the same page with simulated
+doors on port 8081 (clearly bannered DEMO, no PLC access, no log files written).
+
 ## Project layout
 
 ```
@@ -140,6 +152,8 @@ src/sentinel/
   plc_poller.py      Southbound pylogix CIP polling
   state_manager.py   Invert/debounce/pulse-stretch conditioning
   event_log.py       Daily door-event log (Excel .xlsx / CSV)
+  dashboard.py       Read-only live cockpit HTTP server + demo feed
+  dashboard_page.py  Cockpit HTML/JS page
   bacnet_server.py   Northbound bacpypes3 BACnet/IP server
   main.py            CLI, asyncio orchestration, signal handling
 tests/

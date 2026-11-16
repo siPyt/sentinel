@@ -70,6 +70,9 @@ BACNET/IP SERVER (Siemens Apogee / Insight BMS side, UDP port 47808)
 
 NOTES
 -----
+- LIVE COCKPIT: read-only status page served by sentinel on 127.0.0.1:8080 (loopback only,
+  not reachable from the network). Desktop icon "Sentinel Cockpit" opens it in a Chromium
+  app window; the browser proxy policies bypass localhost so no internet password is asked.
 - INTERNET GATE (Pi desktop / VNC): browsing from the Pi requires a username and password.
   Chromium and Firefox are forced through a local authenticating proxy (tinyproxy on
   127.0.0.1:8888, config /etc/tinyproxy/tinyproxy.conf, root-only), and an nftables rule

@@ -73,6 +73,11 @@ class PLCPoller:
         self._next_attempt_monotonic = 0.0
         self.consecutive_failures = 0
 
+    @property
+    def bad_timer_tags(self) -> list[str]:
+        """Door-ajar timer tags currently unreadable (for the cockpit)."""
+        return sorted(self._bad_timer_tags)
+
     async def poll(self) -> PollResult:
         """Run one batched read cycle, or skip while backoff is in effect."""
         now = time.monotonic()

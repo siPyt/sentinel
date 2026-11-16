@@ -18,6 +18,7 @@ import contextlib
 import logging
 import signal
 import sys
+import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -25,6 +26,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from sentinel.config import AppConfig, configure_logging, load_config
+from sentinel.dashboard import StatusBoard, publish, run_demo_feed, start_dashboard
 from sentinel.event_log import DoorEventRecorder, EventLogger
 from sentinel.plc_poller import PLCPoller, PollResult
 from sentinel.state_manager import StateManager
@@ -37,6 +39,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="sentinel", description="Cleanroom Door State Bridge (airlock-sentinel)"
     )
     parser.add_argument("--config", required=True, type=Path, help="Path to config.yaml")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help=(
+            "Open the live cockpit with SIMULATED doors and events -- for seeing the layout "
+            "without a PLC. Nothing is read from a PLC or written to the logs."
+        ),
+    )
     parser.add_argument(
         "--log-only",
         action="store_true",
@@ -107,6 +117,16 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
     )
 
     event_logger = _build_event_logger(config)
+    board = StatusBoard(config, event_logger) if config.dashboard.enabled else None
+    if board is not None and event_logger is not None:
+        event_logger.add_listener(board.on_event)
+    cockpit = None
+    if board is not None:
+        try:
+            cockpit = start_dashboard(board, config.dashboard.bind, config.dashboard.port)
+        except OSError as exc:  # the cockpit is optional: never stop the logger for it
+            logger.error("Cockpit disabled: cannot listen on %s:%d (%s)",
+                         config.dashboard.bind, config.dashboard.port, exc)
     recorder = DoorEventRecorder(event_logger) if event_logger is not None else None
     if recorder is not None:
         recorder.on_started()
@@ -164,6 +184,8 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                         door_state.effective_open,
                         door_state.reliable,
                     )
+            if board is not None:
+                publish(board, config, results_by_plc, state_manager, pollers)
             if event_logger is not None and event_logger.has_pending:
                 await asyncio.to_thread(event_logger.flush_pending)
 
@@ -174,8 +196,33 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
         await asyncio.gather(*(p.close() for p in pollers.values()), return_exceptions=True)
         if event_logger is not None:
             event_logger.flush_pending()  # don't lose events queued in the final cycle
+        if cockpit is not None:
+            cockpit.shutdown()
+            cockpit.server_close()
         if bacnet is not None:
             await bacnet.close()
+
+
+async def run_demo(config: AppConfig) -> None:
+    """Cockpit with simulated doors and events -- no PLC, no log files, no BACnet."""
+    port = config.dashboard.port + 1  # never collide with the real service's cockpit
+    board = StatusBoard(config, demo=True)
+    stop = threading.Event()
+    try:
+        server = start_dashboard(board, config.dashboard.bind, port)
+    except OSError as exc:
+        raise SystemExit(f"error: cannot listen on {config.dashboard.bind}:{port} ({exc})") from exc
+    feeder = threading.Thread(target=run_demo_feed, args=(board, config, stop), daemon=True)
+    feeder.start()
+    print(f"Demo cockpit (simulated data): http://{config.dashboard.bind}:{port}/   (Ctrl+C to stop)")
+    stop_event = asyncio.Event()
+    _install_signal_handlers(stop_event)
+    try:
+        await stop_event.wait()
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
 
 
 async def run_plc_test(config: AppConfig) -> None:
@@ -261,7 +308,9 @@ def cli_main() -> None:
     configure_logging(config.service.log_level)
 
     with contextlib.suppress(KeyboardInterrupt):
-        if args.plc_test:
+        if args.demo:
+            asyncio.run(run_demo(config))
+        elif args.plc_test:
             asyncio.run(run_plc_test(config))
         else:
             asyncio.run(run_daemon(config, log_only=args.log_only))

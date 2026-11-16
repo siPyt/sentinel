@@ -180,6 +180,7 @@ class EventLogger:
         self._queue_lock = threading.Lock()  # guards _pending
         self._flush_lock = threading.Lock()  # one writer at a time
         self._write_error_logged = False
+        self._listeners: list[Callable[[Row], None]] = []
         try:
             self._directory.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -195,6 +196,10 @@ class EventLogger:
     @property
     def has_pending(self) -> bool:
         return bool(self._pending)
+
+    def add_listener(self, callback: Callable[[Row], None]) -> None:
+        """Be told about every event row as it is logged (used by the live cockpit)."""
+        self._listeners.append(callback)
 
     def log_event(
         self,
@@ -225,6 +230,11 @@ class EventLogger:
         )
         with self._queue_lock:
             self._pending.append((when.date(), row))
+        for listener in self._listeners:
+            try:
+                listener(row)
+            except Exception:  # a display problem must never stop logging
+                logger.exception("event listener failed")
         if self._auto_flush:
             self.flush_pending()
 

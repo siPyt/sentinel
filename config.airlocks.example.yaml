@@ -28,6 +28,13 @@ event_log:
   directory: "~/Desktop/AirlockLogs"
   file_prefix: ""
 
+# Read-only live cockpit page (door tiles, recent events, PLC health).
+# Loopback only: open it on the Pi desktop at http://127.0.0.1:8080/
+dashboard:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 8080
+
 # Only needed for the BACnet daemon (not for --log-only).
 bacnet:
   device_id: 1001

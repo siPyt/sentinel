@@ -42,6 +42,17 @@ class ServiceConfig(BaseModel):
     log_level: LogLevel = "INFO"
 
 
+class DashboardConfig(BaseModel):
+    """``dashboard:`` section -- read-only live status page ("cockpit")."""
+
+    enabled: bool = True
+    bind: str = Field(
+        default="127.0.0.1",
+        description="Address to listen on. Keep 127.0.0.1 so only the Pi's own screen can open it.",
+    )
+    port: int = Field(default=8080, ge=1024, le=65535)
+
+
 class EventLogConfig(BaseModel):
     """``event_log:`` section -- daily CSV of door open/close events."""
 
@@ -199,6 +210,7 @@ class AppConfig(BaseModel):
 
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     event_log: EventLogConfig = Field(default_factory=EventLogConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     # Optional so the event-log-only mode (--log-only) needs no BMS settings;
     # main.py requires it for the normal BACnet daemon.
     bacnet: BACnetConfig | None = None
