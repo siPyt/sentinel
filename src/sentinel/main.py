@@ -85,7 +85,9 @@ def _build_event_logger(config: AppConfig) -> EventLogger | None:
     if not config.event_log.enabled:
         return None
     try:
-        event_logger = EventLogger(config.event_log.directory, config.event_log.file_prefix)
+        event_logger = EventLogger(
+            config.event_log.directory, config.event_log.file_prefix, config.event_log.format
+        )
     except OSError as exc:
         logger.error("Event log disabled: cannot use %s (%s)", config.event_log.directory, exc)
         return None

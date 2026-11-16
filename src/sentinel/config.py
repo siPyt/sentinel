@@ -54,6 +54,10 @@ class EventLogConfig(BaseModel):
         ),
     )
     file_prefix: str = Field(default="airlock_events", min_length=1)
+    format: Literal["xlsx", "csv"] = Field(
+        default="xlsx",
+        description="'xlsx' = Excel workbook per day (default); 'csv' = plain CSV per day.",
+    )
 
 
 class BACnetConfig(BaseModel):

@@ -1,6 +1,8 @@
 import csv
-from datetime import datetime
+from datetime import datetime, time as dtime
 from pathlib import Path
+
+from openpyxl import load_workbook
 
 from sentinel.config import load_config
 from sentinel.event_log import HEADER, DoorEventRecorder, EventLogger
@@ -15,7 +17,7 @@ def _rows(path: Path) -> list[list[str]]:
 
 
 def test_daily_files_and_columns(tmp_path):
-    log = EventLogger(tmp_path)
+    log = EventLogger(tmp_path, file_format="csv")
     kwargs = dict(airlock="N1065", door="DOOR_N1065A", tag="Local:10:I.Data.0", plc="plc1")
     log.log_event(event="OPENED", raw_value=False, when=datetime(2026, 11, 16, 23, 59, 59, 5000), **kwargs)
     log.log_event(event="CLOSED", raw_value=True, when=datetime(2026, 11, 17, 0, 0, 3), **kwargs)
@@ -30,10 +32,49 @@ def test_daily_files_and_columns(tmp_path):
     assert day2[1][4] == "CLOSED" and day2[1][8] == "1"
 
 
+def test_xlsx_daily_workbook_has_typed_cells_and_appends(tmp_path):
+    log = EventLogger(tmp_path)  # xlsx is the default
+    kwargs = dict(airlock="N1065", door="DOOR_N1065A", tag="Local:10:I.Data.0", plc="plc1")
+    log.log_event(event="OPENED", raw_value=False, when=datetime(2026, 11, 16, 9, 5, 7, 250000), **kwargs)
+    log.log_event(
+        event="CLOSED", raw_value=True, duration_s=61.34,
+        when=datetime(2026, 11, 16, 9, 6, 8, 590000), **kwargs,
+    )
+    log.log_event(
+        airlock="", door="", event="PLC COMM LOST", tag="", raw_value=None, plc="plc1",
+        when=datetime(2026, 11, 17, 0, 0, 1),
+    )
+
+    workbook = load_workbook(tmp_path / "airlock_events_2026-11-16.xlsx")
+    assert workbook.sheetnames == ["Events", "Key"]
+    events = workbook["Events"]
+    rows = list(events.iter_rows(values_only=True))
+    assert list(rows[0]) == list(HEADER) and len(rows) == 3
+    assert rows[1][:2] == (datetime(2026, 11, 16), dtime(9, 5, 7, 250000))  # real date + time cells
+    assert rows[1][4:9] == ("OPENED", None, None, "Local:10:I.Data.0", 0)
+    assert rows[2][4:9] == ("CLOSED", "0:01:01", 61.3, "Local:10:I.Data.0", 1)
+    assert events.freeze_panes == "A2" and events.auto_filter.ref == "A1:K3"
+    assert events["A3"].fill.start_color.rgb.endswith("E2EFDA")  # CLOSED rows are green
+    # next day rolls into its own workbook
+    assert (tmp_path / "airlock_events_2026-11-17.xlsx").exists()
+
+
+def test_unreadable_xlsx_is_set_aside_not_overwritten(tmp_path):
+    bad = tmp_path / "airlock_events_2026-11-16.xlsx"
+    bad.write_bytes(b"not a real workbook")
+    log = EventLogger(tmp_path)
+    log.log_event(
+        airlock="A", door="D", event="OPENED", tag="t", raw_value=False, plc="p",
+        when=datetime(2026, 11, 16, 10, 0, 0),
+    )
+    assert len(list(tmp_path.glob("*.unreadable-*.xlsx"))) == 1
+    assert load_workbook(bad)["Events"].max_row == 2
+
+
 def test_unwritable_folder_is_retried_not_disabled(tmp_path):
     blocker = tmp_path / "logs"
     blocker.write_text("a file where the folder should be")
-    log = EventLogger(blocker)  # must not raise
+    log = EventLogger(blocker, file_format="csv")  # must not raise
     log.log_event(airlock="A", door="D", event="OPENED", tag="t", raw_value=False, plc="p")
     blocker.unlink()  # permissions fixed / folder now creatable
     log.flush_pending()
@@ -41,7 +82,7 @@ def test_unwritable_folder_is_retried_not_disabled(tmp_path):
 
 
 def test_unwritable_rows_are_retried(tmp_path, monkeypatch):
-    log = EventLogger(tmp_path)
+    log = EventLogger(tmp_path, file_format="csv")
     original = EventLogger._append
 
     def locked(*_args):
@@ -58,7 +99,7 @@ def test_unwritable_rows_are_retried(tmp_path, monkeypatch):
 
 def _recorder(tmp_path):
     clock = {"t": 1000.0}
-    recorder = DoorEventRecorder(EventLogger(tmp_path), clock=lambda: clock["t"])
+    recorder = DoorEventRecorder(EventLogger(tmp_path, file_format="csv"), clock=lambda: clock["t"])
     config = load_config(REPO / "config.airlocks.example.yaml")
     return recorder, clock, config.plcs[0].doors[0]
 

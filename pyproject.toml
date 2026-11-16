@@ -13,6 +13,7 @@ dependencies = [
     "bacpypes3>=0.0.102",
     "pydantic>=2.5",
     "PyYAML>=6.0",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
