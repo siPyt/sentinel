@@ -27,6 +27,18 @@ event_log:
   # "~" is the home folder of the user running sentinel (admin on the Pi).
   directory: "~/Desktop/AirlockLogs"
   file_prefix: ""
+  # Tamper-evident ledger: every row is also chained (SHA-256) into this folder, which the
+  # desktop user must not be able to write. Check with: python -m sentinel --verify-logs
+  # (default if omitted: a hidden .ledger folder inside "directory").
+  ledger_directory: "/var/lib/sentinel/ledger"
+  read_only_past_days: true
+
+# Conditions that are logged (and flash on the cockpit).
+alerts:
+  interlock_violation: true   # two doors of one airlock open together (per door: interlock_group)
+  interlock_hold_s: 1.0       # ...for at least this long
+  chatter_changes: 8          # a door changing state this many times...
+  chatter_window_s: 30        # ...within this many seconds
 
 # Read-only live cockpit page (door tiles, recent events, PLC health).
 # Loopback only: open it on the Pi desktop at http://127.0.0.1:8080/

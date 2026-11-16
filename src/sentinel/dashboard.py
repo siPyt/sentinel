@@ -14,7 +14,6 @@ Design notes:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import random
@@ -22,24 +21,32 @@ import shutil
 import threading
 import time
 from collections import Counter, deque
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from sentinel import __version__
+from sentinel.alerts import AlertMonitor, interlock_group_of
 from sentinel.config import AppConfig
 from sentinel.dashboard_page import PAGE
 from sentinel.event_log import (
+    EVENT_CHATTER,
     EVENT_CLOSED,
+    EVENT_GAP,
+    EVENT_INTERLOCK,
+    EVENT_INTERLOCK_CLEARED,
     EVENT_OPENED,
     EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
     EVENT_PLC_ONLINE,
     EVENT_STARTED,
+    EVENT_STOPPED,
     EVENT_TIMED_OUT,
     EventLogger,
     format_duration,
 )
+from sentinel.health import HealthTracker
+from sentinel.integrity import clock_status, config_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +75,10 @@ class StatusBoard:
         self._logger = event_logger
         self.demo = demo
         self._started = time.time()
-        self._fingerprint = hashlib.sha256(config.model_dump_json().encode()).hexdigest()[:12]
+        self._fingerprint = config_fingerprint(config)
+        self._alerts: dict = {"interlock": [], "chatter": []}
+        self._health = HealthTracker()
+        self._clock = ("unknown", 0.0)  # (status, when it was checked)
         self._plcs: dict[str, dict] = {}
         self._doors: dict[tuple[str, str], dict] = {}
         for plc in config.plcs:
@@ -140,11 +150,22 @@ class StatusBoard:
             door["raw"] = None if raw is None else int(raw)
             door["timer_done"] = timer_done
 
+    def set_alerts(self, alerts: dict) -> None:
+        """Active interlock violations and chattering doors (see alerts.AlertMonitor.snapshot)."""
+        with self._lock:
+            self._alerts = alerts
+
+    def load_health_history(self, ledger_path) -> int:
+        """Rebuild the last 7 days of door health from the ledger (call once at startup)."""
+        with self._lock:
+            return self._health.load_history(ledger_path)
+
     def on_event(self, row: tuple) -> None:
         """Receive one logged event row (see event_log.Row)."""
-        day, clock, airlock, door, event, open_for, tag, raw, plc, seconds = row
+        day, clock, airlock, door, event, open_for, tag, raw, plc, seconds, detail = row
         stamp = datetime.combine(day, clock)
         with self._lock:
+            self._health.record(stamp.timestamp(), door, event, seconds)
             self._rows += 1
             self._counts[event] += 1
             self._events.appendleft(
@@ -156,6 +177,7 @@ class StatusBoard:
                     "door": door,
                     "event": event,
                     "open_for": open_for,
+                    "detail": detail,
                     "tag": tag,
                     "raw": raw,
                     "plc": plc,
@@ -164,9 +186,17 @@ class StatusBoard:
 
     # -- read side -------------------------------------------------------------
 
+    def _clock_status(self) -> str:
+        status, checked = self._clock
+        if time.time() - checked > 300:  # a subprocess call: refresh every 5 minutes at most
+            status, checked = clock_status(), time.time()
+            self._clock = (status, checked)
+        return status
+
     def snapshot(self) -> dict:
         now = time.time()
         local = datetime.now().astimezone()
+        clock = self._clock_status()
         with self._lock:
             counts = self._counts
             return {
@@ -174,12 +204,14 @@ class StatusBoard:
                 "demo": self.demo,
                 "local_time": local.strftime("%A %d-%b-%Y  %I:%M:%S %p").replace("  0", "  "),
                 "timezone": local.tzname(),
+                "clock_sync": clock,
                 "started": self._started,
                 "version": __version__,
                 "config_fingerprint": self._fingerprint,
                 "poll_interval_ms": self._config.service.poll_interval_ms,
                 "plcs": [dict(p) for p in self._plcs.values()],
-                "doors": [dict(d) for d in self._doors.values()],
+                "doors": [dict(d, health=self._health.score(d["name"], now)) for d in self._doors.values()],
+                "alerts": self._alerts,
                 "events": list(self._events)[:100],
                 "counts": {
                     "opened": counts[EVENT_OPENED] + counts[EVENT_OPENED_AT_STARTUP],
@@ -187,6 +219,9 @@ class StatusBoard:
                     "timed_out": counts[EVENT_TIMED_OUT],
                     "plc_offline": counts[EVENT_PLC_OFFLINE],
                     "restarts": counts[EVENT_STARTED],
+                    "interlock": counts[EVENT_INTERLOCK],
+                    "chatter": counts[EVENT_CHATTER],
+                    "gaps": counts[EVENT_GAP],
                 },
                 "log": self._log_info(),
             }
@@ -207,6 +242,7 @@ class StatusBoard:
             free_gb, total_gb = round(usage.free / 2**30, 1), round(usage.total / 2**30, 1)
         except OSError:
             free_gb = total_gb = None
+        ledger = self._logger.ledger
         return {
             "file": path.name,
             "folder": str(path.parent),
@@ -215,6 +251,9 @@ class StatusBoard:
             "pending": self._logger.has_pending,
             "disk_free_gb": free_gb,
             "disk_total_gb": total_gb,
+            "ledger": None
+            if ledger is None
+            else {"records": ledger.seq, "head": ledger.head[:12], "healthy": self._logger.ledger_healthy},
         }
 
 
@@ -312,8 +351,11 @@ class _DemoDoor:
         self.timer_logged = False
 
 
-def _demo_row(door, event: str, seconds: float | None = None, raw: int | None = None) -> tuple:
-    now = datetime.now()
+def _demo_row(
+    door, event: str, seconds: float | None = None, raw: int | None = None, detail: str = "",
+    ago_s: float = 0.0,
+) -> tuple:
+    now = datetime.now() - timedelta(seconds=ago_s)
     return (
         now.date(),
         now.time(),
@@ -325,25 +367,136 @@ def _demo_row(door, event: str, seconds: float | None = None, raw: int | None = 
         raw,
         "plc1" if door is not None else "",
         None if seconds is None else round(seconds, 1),
+        detail,
     )
 
 
+class _DemoSink:
+    """Stands in for the event recorder so demo alerts show up in the recent-events list."""
+
+    def __init__(self, board: StatusBoard) -> None:
+        self._board = board
+
+    def on_interlock(self, group, doors, duration_s, started) -> None:
+        first = doors[0][1]
+        names = " + ".join(d.object_name for _, d in doors)
+        row = _demo_row(
+            first,
+            EVENT_INTERLOCK if started else EVENT_INTERLOCK_CLEARED,
+            None if started else duration_s,
+            detail="Both doors were open at the same time" if started else "At most one door is open again",
+        )
+        self._board.on_event(row[:3] + (names,) + row[4:])
+
+    def on_chatter(self, plc_id, door, changes, window_s) -> None:
+        self._board.on_event(
+            _demo_row(door, EVENT_CHATTER, detail=f"{changes} open/close changes within {format_duration(window_s)}")
+        )
+
+
+def _seed_demo_health(board: StatusBoard, doors: list, rng: random.Random) -> None:
+    """Give the demo a week of made-up history so every heart colour is visible straight away."""
+    now = time.time()
+    for door in doors:
+        name = door.cfg.object_name
+        for _ in range(rng.randint(25, 70)):
+            ts = now - rng.uniform(300, 7 * 86400)
+            seconds = rng.uniform(5, 14)
+            board._health.record(ts, name, EVENT_OPENED)
+            board._health.record(ts + seconds, name, EVENT_CLOSED, seconds)
+    # door index -> what went wrong in the last week (red broken, orange, yellow hearts)
+    problems = {
+        3: [EVENT_CHATTER] * 3 + [EVENT_INTERLOCK],
+        22: [EVENT_CHATTER] * 2 + [EVENT_INTERLOCK] * 2,
+        10: [EVENT_CHATTER] * 2,
+        30: [EVENT_CHATTER, EVENT_INTERLOCK] + [EVENT_TIMED_OUT] * 4,
+        14: [EVENT_CHATTER],
+        26: [EVENT_INTERLOCK] * 2,
+        38: [EVENT_INTERLOCK] + [EVENT_TIMED_OUT] * 10,
+    }
+    for index, events in problems.items():
+        if index < len(doors):
+            for event in events:
+                board._health.record(now - rng.uniform(3600, 6 * 86400), doors[index].cfg.object_name, event)
+
+
+SHOWCASE_S = 170.0  # how long the staged "everything at once" scene is held
+SHOWCASE_EVERY_S = 480.0  # ...and how often it comes round again
+
+
+def _seed_demo_history(board: StatusBoard) -> None:
+    """Older rows for the recent-events list, so each kind of row is on screen for a screenshot."""
+    info = f"Version {__version__} | Config {board._fingerprint} | Clock NOT synced to a time server"
+    stamp = lambda s: (datetime.now() - timedelta(seconds=s)).strftime("%d-%b %I:%M:%S %p")  # noqa: E731
+    for ago, event, detail in (
+        (1800, EVENT_STOPPED, "Normal shutdown (service stop, restart or reboot)"),
+        (1730, EVENT_STARTED, f"{info} | Stopped normally, down for 1 min 12 sec"),
+        (760, EVENT_GAP, f"Nothing was monitored from about {stamp(843)} to {stamp(760)} (1 min 23 sec). "
+                         "Sentinel ended unexpectedly (power cut or crash)."),
+        (760, EVENT_STARTED, info),
+        (380, EVENT_PLC_OFFLINE, ""),
+        (330, EVENT_PLC_ONLINE, ""),
+    ):
+        board.on_event(_demo_row(None, event, detail=detail, ago_s=ago))
+
+
 def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) -> None:
-    """Drive the board with simulated door traffic. Never logs to disk or touches a PLC."""
+    """Drive the board with simulated door traffic. Never logs to disk or touches a PLC.
+
+    It opens with a staged scene (an interlock violation, a chattering switch, a door left
+    open past its timer, an open door, broken hearts) held for a few minutes so the whole
+    feature set can be screenshotted, then carries on with random traffic.
+    """
     rng = random.Random()
     plc_id = config.plcs[0].id
+    monitor = AlertMonitor(config, sink=_DemoSink(board))
     doors = [_DemoDoor(d) for d in config.plcs[0].doors]
-    by_airlock: dict[str, list[_DemoDoor]] = {}
+    _seed_demo_health(board, doors, rng)
+    _seed_demo_history(board)
+    by_group: dict[str, list[_DemoDoor]] = {}
     for door in doors:
-        by_airlock.setdefault(door.cfg.airlock, []).append(door)
+        by_group.setdefault(interlock_group_of(door.cfg) or door.cfg.object_name, []).append(door)
+    pairs = [group for group in by_group.values() if len(group) >= 2]
     now = time.time()
     next_pass, next_stuck = now + 1.0, now + 20.0
+    next_overlap, next_bounce = now + 25.0, now + 50.0
     next_offline, offline_until = now + 120.0, 0.0
-    board.on_event(_demo_row(None, EVENT_STARTED))
+    bounce: dict = {"door": None, "left": 0, "at": 0.0, "silent": False}
+    scene = {"until": 0.0, "next": 0.0, "chatter_door": None, "rebounce": 0.0}
+
+    def idle(group) -> bool:
+        return not any(d.open_at is not None or d.is_open for d in group)
+
+    def pick(name: str, fallback: int) -> _DemoDoor:
+        return next((d for d in doors if d.cfg.object_name == name), doors[min(fallback, len(doors) - 1)])
+
+    def stage(at: float) -> None:
+        scene.update(until=at + SHOWCASE_S, next=at + SHOWCASE_EVERY_S, rebounce=at + 20.0)
+        for d in doors:
+            d.open_at, d.is_open = None, False
+        bounce.update(door=None, left=0)
+        # (door, seconds it has already been open): the pair is the interlock violation, the
+        # third is past its 30 s timer, the fourth is simply open.
+        for door, open_for in (
+            (pick("DOOR_N1065A", 0), 5.0), (pick("DOOR_N1065B", 1), 3.0),
+            (pick("DOOR_N1008A", 2), 36.0), (pick("DOOR_N1011A", 3), 9.0),
+        ):
+            door.is_open, door.opened, door.timer_logged = True, at - open_for, False
+            door.open_at, door.close_at = at - open_for, at + SHOWCASE_S - 5
+            board.on_event(_demo_row(door.cfg, EVENT_OPENED, raw=0))
+            monitor.on_transition(plc_id, door.cfg, False)
+        scene["chatter_door"] = pick("DOOR_N1006A", 4)
+        bounce.update(door=scene["chatter_door"], left=10, at=at + 1.0, silent=True)
+
+    stage(now)
 
     while not stop.wait(0.5):
         now = time.time()
-        if now >= next_offline and not offline_until:
+        staged = now < scene["until"]
+        if not staged and now >= scene["next"] and not offline_until:
+            stage(now)
+            staged = True
+        if now >= next_offline and not offline_until and not staged:
             offline_until, next_offline = now + 8.0, now + rng.uniform(150, 300)
             board.on_event(_demo_row(None, EVENT_PLC_OFFLINE))
         offline = now < offline_until
@@ -360,22 +513,51 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
             error="demo: simulated PLC dropout" if offline else "",
         )
         if not offline:
-            if now >= next_pass:
+            if staged:  # keep the switch chattering so its warning stays up for the whole scene
+                if bounce["door"] is None and now >= scene["rebounce"]:
+                    scene["rebounce"] = now + 20.0
+                    bounce.update(door=scene["chatter_door"], left=10, at=now, silent=True)
+            elif now >= next_pass:
                 next_pass = now + rng.uniform(3, 8)
-                airlock = rng.choice(list(by_airlock))
-                group = by_airlock[airlock]
-                if len(group) >= 2 and not any(d.open_at is not None for d in group):
+                group = rng.choice(pairs)
+                if idle(group):
                     first, second = rng.sample(group, 2)
                     first.open_at, first.close_at = now, now + rng.uniform(5, 12)
                     second.open_at = first.close_at + rng.uniform(1.5, 4)
                     second.close_at = second.open_at + rng.uniform(5, 12)
-            if now >= next_stuck:
+            if not staged and now >= next_stuck:
                 next_stuck = now + rng.uniform(90, 150)
                 door = rng.choice(doors)
-                if door.open_at is None:
+                if idle(by_group[interlock_group_of(door.cfg) or door.cfg.object_name]):
                     door.open_at, door.close_at = now, now + rng.uniform(40, 65)
+            if not staged and now >= next_overlap:  # both doors of an airlock open together
+                next_overlap = now + rng.uniform(150, 240)
+                group = rng.choice(pairs)
+                if idle(group):
+                    first, second = rng.sample(group, 2)
+                    first.open_at, first.close_at = now, now + 14.0
+                    second.open_at, second.close_at = now + 3.0, now + 11.0
+            if not staged and now >= next_bounce and bounce["door"] is None:  # a failing switch
+                next_bounce = now + rng.uniform(200, 320)
+                door = rng.choice(doors)
+                if idle(by_group[interlock_group_of(door.cfg) or door.cfg.object_name]):
+                    bounce.update(door=door, left=10, at=now, silent=False)
+            if bounce["door"] is not None and now >= bounce["at"]:
+                door = bounce["door"]
+                door.is_open = not door.is_open
+                door.opened = now
+                if not bounce["silent"]:
+                    board.on_event(
+                        _demo_row(door.cfg, EVENT_OPENED if door.is_open else EVENT_CLOSED, raw=0 if door.is_open else 1)
+                    )
+                monitor.on_transition(plc_id, door.cfg, False)
+                bounce["left"] -= 1
+                bounce["at"] = now + 1.0
+                if bounce["left"] <= 0:
+                    door.is_open = False
+                    bounce["door"] = None
             for door in doors:
-                _demo_step(board, door, now)
+                _demo_step(board, door, now, monitor, plc_id)
 
         for door in doors:
             if offline:
@@ -384,14 +566,18 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
                 state = STATE_OPEN if door.is_open else STATE_CLOSED
                 raw, timer = (0 if door.is_open else 1), (now - door.opened >= DEMO_TIMER_S if door.is_open else False)
             board.set_door(plc_id, door.cfg.tag, state=state, raw=raw, timer_done=timer)
+        monitor.evaluate({(plc_id, d.cfg.tag): (None if offline else d.is_open) for d in doors})
+        board.set_alerts(monitor.snapshot())
 
 
-def _demo_step(board: StatusBoard, door: _DemoDoor, now: float) -> None:
+def _demo_step(board: StatusBoard, door: _DemoDoor, now: float, monitor=None, plc_id: str = "plc1") -> None:
     if door.open_at is None:
         return
     if not door.is_open and now >= door.open_at:
         door.is_open, door.opened, door.timer_logged = True, now, False
         board.on_event(_demo_row(door.cfg, EVENT_OPENED, raw=0))
+        if monitor is not None:
+            monitor.on_transition(plc_id, door.cfg, False)
     if door.is_open:
         elapsed = now - door.opened
         if elapsed >= DEMO_TIMER_S and not door.timer_logged:
@@ -400,3 +586,5 @@ def _demo_step(board: StatusBoard, door: _DemoDoor, now: float) -> None:
         if now >= door.close_at:
             board.on_event(_demo_row(door.cfg, EVENT_CLOSED, elapsed, 1))
             door.is_open, door.open_at = False, None
+            if monitor is not None:
+                monitor.on_transition(plc_id, door.cfg, False)

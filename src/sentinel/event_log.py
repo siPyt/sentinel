@@ -12,20 +12,26 @@ Design notes:
   corrupts the day's file and a viewer can have it open meanwhile.
 - Rows that cannot be written (locked file, full disk) are kept in memory and
   retried on the next ``flush_pending()`` call instead of being dropped.
-- Timestamps are local wall time. Dates/times are real Excel date/time cells
-  so they sort and filter properly.
+- Timestamps are local wall time; the UTC time of every row is in its own column.
+  Dates/times are real Excel date/time cells so they sort and filter properly.
+- Every row is also appended to a hash-chained ledger (see ``integrity.py``) and
+  carries its record number and a short check code, so edits are detectable.
+- Finished days are marked read-only (a guard against accidents, not security).
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+import math
 import os
+import re
+import stat
 import threading
 import time
 import zipfile
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -35,9 +41,12 @@ from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.properties import PageSetupProperties
 
 from sentinel.config import DoorConfig
+from sentinel.integrity import CHECK_CODE_LENGTH, Ledger, PreviousRun
 
 logger = logging.getLogger(__name__)
 
+# Sheet columns, left to right. What the reader needs comes first; the grey technical
+# columns follow, and the integrity columns (UTC time, record number, check code) are last.
 HEADER: tuple[str, ...] = (
     "Date",
     "Time",
@@ -45,10 +54,14 @@ HEADER: tuple[str, ...] = (
     "Door",
     "What Happened",
     "Open For",
+    "Details",
     "Tag Polled",
     "Raw Value",
     "PLC",
     "Open Seconds",
+    "UTC Time",
+    "Rec #",
+    "Check Code",
 )
 
 # Event names as shown in the log (kept plain-English for non-technical readers).
@@ -59,15 +72,26 @@ EVENT_TIMED_OUT = "LEFT OPEN - TIMED OUT"
 EVENT_PLC_OFFLINE = "PLC OFFLINE"
 EVENT_PLC_ONLINE = "PLC BACK ONLINE"
 EVENT_STARTED = "SENTINEL STARTED"
+EVENT_STOPPED = "SENTINEL STOPPED"
+EVENT_GAP = "DATA GAP"
+EVENT_INTERLOCK = "INTERLOCK VIOLATION"
+EVENT_INTERLOCK_CLEARED = "INTERLOCK CLEARED"
+EVENT_CHATTER = "DOOR CHATTERING"
 
-# One typed log row, in column order: date, time, airlock, door, event,
-# "open for" text, tag, raw 0/1, plc, open seconds.
+# One logged event, in this order: date, time, airlock, door, event, "open for" text,
+# tag, raw 0/1, plc, open seconds, details. ``Row`` is what listeners (the cockpit) get.
 Row = tuple
+# The full row stored in the file also has: UTC time text, record number, check code.
+_SHEET_ORDER = (0, 1, 2, 3, 4, 5, 10, 6, 7, 8, 9, 11, 12, 13)  # full-row index per sheet column
+_ROW_FIELDS = 11
 
-_COLUMN_WIDTHS = (14, 15, 22, 16, 27, 19, 24, 11, 8, 14)
-_CENTERED_COLUMNS = {2, 5, 6, 8, 9, 10}
-_TECHNICAL_COLUMNS = {7, 8, 9, 10}  # shown in grey, out of the way
-_SECONDS_COLUMN = 10
+_COLUMN_WIDTHS = (14, 15, 22, 22, 27, 19, 48, 24, 11, 8, 14, 24, 8, 15)
+_CENTERED_COLUMNS = {2, 5, 6, 9, 10, 11, 13}
+_TECHNICAL_COLUMNS = {8, 9, 10, 11, 12, 13, 14}  # shown in grey, out of the way
+_EVENT_COLUMN = 5
+_DOOR_COLUMN = 4
+_DETAILS_COLUMN = 7
+_SECONDS_COLUMN = 11
 
 # (row fill, text colour) per event.
 _OPENED_STYLE = ("FFE699", "7F6000")
@@ -80,10 +104,25 @@ _EVENT_STYLES: dict[str, tuple[str, str]] = {
     EVENT_PLC_OFFLINE: ("D0CECE", "3B3838"),
     EVENT_PLC_ONLINE: ("BDD7EE", "1F4E79"),
     EVENT_STARTED: ("D9D2E9", "4B2C83"),
+    EVENT_STOPPED: ("D9D2E9", "4B2C83"),
+    EVENT_GAP: ("FFC7CE", "9C0006"),
+    EVENT_INTERLOCK: ("FF7C80", "7F0000"),
+    EVENT_INTERLOCK_CLEARED: ("E2EFDA", "375623"),
+    EVENT_CHATTER: ("F8CBAD", "843C0C"),
 }
 # Routine events colour only the "What Happened" cell so a long day stays easy to
 # scan; these need attention, so their whole row is highlighted.
-_FULL_ROW_EVENTS = {EVENT_TIMED_OUT, EVENT_PLC_OFFLINE, EVENT_PLC_ONLINE, EVENT_STARTED}
+_FULL_ROW_EVENTS = {
+    EVENT_TIMED_OUT,
+    EVENT_PLC_OFFLINE,
+    EVENT_PLC_ONLINE,
+    EVENT_STARTED,
+    EVENT_STOPPED,
+    EVENT_GAP,
+    EVENT_INTERLOCK,
+    EVENT_INTERLOCK_CLEARED,
+    EVENT_CHATTER,
+}
 
 KEY_ROWS: tuple[tuple[str, str], ...] = (
     (EVENT_OPENED, "The door was opened (confirmed by the PLC door-position input)."),
@@ -95,9 +134,27 @@ KEY_ROWS: tuple[tuple[str, str], ...] = (
         "(blank if it was already open when sentinel started).",
     ),
     (
+        EVENT_INTERLOCK,
+        "Two doors of the same airlock were open at the same time (they should never be). "
+        "'Details' names the doors. The matching OPENED rows show who opened what, and when.",
+    ),
+    (EVENT_INTERLOCK_CLEARED, "The airlock is back to at most one open door. 'Open For' is how long it lasted."),
+    (
+        EVENT_CHATTER,
+        "The door changed between open and closed many times in a few seconds. This is "
+        "usually a failing switch or loose wiring, not real traffic. Logged once per burst.",
+    ),
+    (
         EVENT_STARTED,
         "Sentinel (re)started, e.g. after a power cut or reboot. It was not watching the doors "
-        "before this row, so anything earlier in the day may be missing.",
+        "before this row. 'Details' gives the software version, the configuration fingerprint, "
+        "whether the clock is synchronised to a time server, and how long it was down.",
+    ),
+    (EVENT_STOPPED, "Sentinel was shut down normally (service stop, restart or reboot). It stops watching here."),
+    (
+        EVENT_GAP,
+        "Sentinel ended unexpectedly (power cut or crash). 'Details' gives the period during which "
+        "nothing was monitored, so a quiet stretch can never be mistaken for 'nothing happened'.",
     ),
     (
         EVENT_OPENED_AT_STARTUP,
@@ -116,15 +173,34 @@ KEY_ROWS: tuple[tuple[str, str], ...] = (
     ("Tag Polled  (grey)", "The PLC tag the state was read from."),
     ("Raw Value  (grey)", "The bit read from the PLC: 0 = door open, 1 = door closed (timer bit: 1 = timer done)."),
     ("Open Seconds  (grey)", "'Open For' as a number of seconds, handy for sorting and filtering."),
+    ("UTC Time  (grey)", "The same moment in UTC, so it is unambiguous across daylight-saving changes."),
+    (
+        "Rec # and Check Code  (grey)",
+        "This row's number in the tamper-evident ledger and the first characters of its hash. "
+        "Do not edit or re-order rows. Run 'python -m sentinel --verify-logs' to check these "
+        "files against the ledger.",
+    ),
 )
 
 
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+_DAY_FILE = re.compile(r"(\d{2})(" + "|".join(_MONTHS) + r")(\d{4})$")
 
 
 def gmp_date(day: date) -> str:
     """GMP-style date, e.g. 16NOV2026 (fixed English month, independent of OS locale)."""
     return f"{day.day:02d}{_MONTHS[day.month - 1]}{day.year}"
+
+
+def date_from_stem(stem: str) -> date | None:
+    """Inverse of ``gmp_date`` for a file stem such as '16NOV2026' or 'prefix_16NOV2026'."""
+    match = _DAY_FILE.search(stem)
+    if not match:
+        return None
+    try:
+        return date(int(match.group(3)), _MONTHS.index(match.group(2)) + 1, int(match.group(1)))
+    except ValueError:
+        return None
 
 
 def format_duration(seconds: float) -> str:
@@ -138,20 +214,16 @@ def format_duration(seconds: float) -> str:
     return f"{secs} sec"
 
 
-def _csv_cells(row: Row) -> list[str]:
-    day, clock, airlock, door, event, open_for, tag, raw, plc, seconds = row
-    return [
-        day.isoformat(),
-        clock.strftime("%H:%M:%S"),
-        airlock,
-        door,
-        event,
-        open_for,
-        tag,
-        "" if raw is None else str(raw),
-        plc,
-        "" if seconds is None else f"{seconds:.1f}",
-    ]
+def _file_cells(full: tuple) -> list:
+    return [full[i] for i in _SHEET_ORDER]
+
+
+def _csv_cells(full: tuple) -> list[str]:
+    cells = _file_cells(full)
+    cells[0] = cells[0].isoformat()
+    cells[1] = cells[1].strftime("%H:%M:%S")
+    cells[_SECONDS_COLUMN - 1] = "" if cells[_SECONDS_COLUMN - 1] is None else f"{cells[_SECONDS_COLUMN - 1]:.1f}"
+    return ["" if cell is None else str(cell) for cell in cells]
 
 
 class EventLogger:
@@ -169,6 +241,8 @@ class EventLogger:
         file_prefix: str = "",
         file_format: str = "xlsx",
         auto_flush: bool = True,
+        ledger: Ledger | None = None,
+        read_only_past_days: bool = False,
     ) -> None:
         if file_format not in ("xlsx", "csv"):
             raise ValueError(f"file_format must be 'xlsx' or 'csv', not {file_format!r}")
@@ -176,7 +250,10 @@ class EventLogger:
         self._prefix = file_prefix
         self._format = file_format
         self._auto_flush = auto_flush
-        self._pending: list[tuple[date, Row]] = []
+        self._ledger = ledger
+        self._ledger_error_logged = False
+        self._seal_past = read_only_past_days
+        self._pending: list[tuple[date, tuple]] = []
         self._queue_lock = threading.Lock()  # guards _pending
         self._flush_lock = threading.Lock()  # one writer at a time
         self._write_error_logged = False
@@ -187,11 +264,28 @@ class EventLogger:
             # Don't give up: rows are queued and every flush retries the folder,
             # so fixing permissions later recovers without a restart.
             logger.error("Cannot create event log folder %s (%s); will keep retrying", self._directory, exc)
+        self.seal_finished_days()
 
     def path_for(self, day: date) -> Path:
         # e.g. 16NOV2026.xlsx (or <prefix>_16NOV2026.xlsx when a prefix is set)
         stem = f"{self._prefix}_{gmp_date(day)}" if self._prefix else gmp_date(day)
         return self._directory / f"{stem}.{self._format}"
+
+    @property
+    def file_format(self) -> str:
+        return self._format
+
+    @property
+    def directory(self) -> Path:
+        return self._directory
+
+    @property
+    def ledger(self) -> Ledger | None:
+        return self._ledger
+
+    @property
+    def ledger_healthy(self) -> bool:
+        return self._ledger is not None and not self._ledger_error_logged
 
     @property
     def has_pending(self) -> bool:
@@ -212,9 +306,14 @@ class EventLogger:
         plc: str,
         duration_s: float | None = None,
         approximate: bool = False,
+        detail: str = "",
         when: datetime | None = None,
     ) -> None:
-        when = when or datetime.now()
+        if when is None:
+            utc = datetime.now(timezone.utc)
+            when = utc.astimezone().replace(tzinfo=None)
+        else:
+            utc = when.astimezone(timezone.utc)  # a naive datetime is taken as local time
         open_for = "" if duration_s is None else format_duration(duration_s)
         row: Row = (
             when.date(),
@@ -227,9 +326,16 @@ class EventLogger:
             None if raw_value is None else int(raw_value),
             plc,
             None if duration_s is None else round(duration_s, 1),
+            detail,
         )
-        with self._queue_lock:
-            self._pending.append((when.date(), row))
+        with self._queue_lock:  # keeps record numbers in the same order as the rows
+            record = self._ledger_append(when, utc, row)
+            full = row + (
+                utc.strftime("%Y-%m-%d %H:%M:%S") + " UTC",
+                None if record is None else record["seq"],
+                "" if record is None else record["hash"][:CHECK_CODE_LENGTH],
+            )
+            self._pending.append((when.date(), full))
         for listener in self._listeners:
             try:
                 listener(row)
@@ -237,6 +343,36 @@ class EventLogger:
                 logger.exception("event listener failed")
         if self._auto_flush:
             self.flush_pending()
+
+    def _ledger_append(self, when: datetime, utc: datetime, row: Row) -> dict | None:
+        if self._ledger is None:
+            return None
+        _day, _clock, airlock, door, event, open_for, tag, raw, plc, seconds, detail = row
+        try:
+            record = self._ledger.append(
+                {
+                    "utc": utc.isoformat(timespec="microseconds"),
+                    "local": when.isoformat(timespec="microseconds"),
+                    "airlock": airlock,
+                    "door": door,
+                    "event": event,
+                    "open_for": open_for,
+                    "tag": tag,
+                    "raw": raw,
+                    "plc": plc,
+                    "seconds": seconds,
+                    "detail": detail,
+                }
+            )
+        except OSError as exc:
+            if not self._ledger_error_logged:
+                logger.error("Cannot write the integrity ledger (%s); rows are logged WITHOUT a record number", exc)
+                self._ledger_error_logged = True
+            return None
+        if self._ledger_error_logged:
+            logger.info("Integrity ledger writes recovered")
+            self._ledger_error_logged = False
+        return record
 
     def flush_pending(self) -> None:
         """Write queued rows (one save per day-file); failures stay queued for the next try."""
@@ -264,15 +400,48 @@ class EventLogger:
                 if self._write_error_logged:
                     logger.info("Event log writes recovered")
                     self._write_error_logged = False
+            if days:
+                self.seal_finished_days()
 
-    def _append(self, day: date, rows: list[Row]) -> None:
+    def seal_finished_days(self, today: date | None = None) -> None:
+        """Mark every day file before today read-only (stops accidental edits)."""
+        if not self._seal_past:
+            return
+        today = today or date.today()
+        try:
+            candidates = list(self._directory.iterdir())
+        except OSError:
+            return
+        for path in candidates:
+            if path.suffix != f".{self._format}" or not path.is_file():
+                continue
+            day = date_from_stem(path.stem)
+            if day is None or day >= today:
+                continue
+            try:
+                mode = path.stat().st_mode
+                if mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+                    path.chmod(mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+            except OSError:
+                logger.debug("could not mark %s read-only", path)
+
+    @staticmethod
+    def _make_writable(path: Path) -> None:
+        try:
+            if path.exists() and not os.access(path, os.W_OK):
+                path.chmod(path.stat().st_mode | stat.S_IWUSR)
+        except OSError:
+            pass
+
+    def _append(self, day: date, rows: list[tuple]) -> None:
         self._directory.mkdir(parents=True, exist_ok=True)
+        self._make_writable(self.path_for(day))
         if self._format == "csv":
             self._append_csv(day, rows)
         else:
             self._append_xlsx(day, rows)
 
-    def _append_csv(self, day: date, rows: list[Row]) -> None:
+    def _append_csv(self, day: date, rows: list[tuple]) -> None:
         path = self.path_for(day)
         is_new = not path.exists() or path.stat().st_size == 0
         # utf-8-sig writes the BOM only when the file is created/empty.
@@ -284,7 +453,7 @@ class EventLogger:
             for row in rows:
                 writer.writerow(_csv_cells(row))
 
-    def _append_xlsx(self, day: date, rows: list[Row]) -> None:
+    def _append_xlsx(self, day: date, rows: list[tuple]) -> None:
         path = self.path_for(day)
         workbook = None
         if path.exists() and path.stat().st_size > 0:
@@ -314,10 +483,11 @@ class EventLogger:
         os.replace(tmp, path)
 
 
-def _append_styled_row(sheet, row: Row) -> None:
-    sheet.append(list(row))
+def _append_styled_row(sheet, full: tuple) -> None:
+    sheet.append(_file_cells(full))
     r = sheet.max_row
-    event_style = _EVENT_STYLES.get(row[4])
+    event = full[4]
+    event_style = _EVENT_STYLES.get(event)
     thin = Side(style="thin", color="BFBFBF")
     for col in range(1, len(HEADER) + 1):
         cell = sheet.cell(r, col)
@@ -325,19 +495,37 @@ def _append_styled_row(sheet, row: Row) -> None:
         cell.alignment = Alignment(
             horizontal="center" if col in _CENTERED_COLUMNS else "left",
             vertical="center",
+            wrap_text=col in (_DOOR_COLUMN, _DETAILS_COLUMN),
         )
         cell.font = Font(name=_FONT, size=12, color="808080" if col in _TECHNICAL_COLUMNS else "000000")
-        if event_style and (col == 5 or row[4] in _FULL_ROW_EVENTS):
+        if event_style and (col == _EVENT_COLUMN or event in _FULL_ROW_EVENTS):
             cell.fill = PatternFill("solid", start_color=event_style[0], end_color=event_style[0])
     if event_style:
-        sheet.cell(r, 5).font = Font(name=_FONT, size=12, bold=True, color=event_style[1])
+        sheet.cell(r, _EVENT_COLUMN).font = Font(name=_FONT, size=12, bold=True, color=event_style[1])
     sheet.cell(r, 1).number_format = "dd-mmm-yyyy"
     sheet.cell(r, 2).number_format = "h:mm:ss AM/PM"
     sheet.cell(r, _SECONDS_COLUMN).number_format = "0.0"
-    sheet.row_dimensions[r].height = 22
+    # Wrapped text (long details, several door names) needs a taller row to stay readable.
+    lines = max(
+        math.ceil(len(full[10]) / 46) if full[10] else 1,
+        math.ceil(len(full[3]) / 20) if full[3] else 1,
+    )
+    sheet.row_dimensions[r].height = 22 if lines == 1 else min(18 * lines + 4, 90)
 
 
 _FONT = "Calibri"
+
+_CLOCK_TEXT = {
+    "synced": "Clock synced to a time server",
+    "not synced": "Clock NOT synced to a time server",
+    "unknown": "Clock sync status unknown",
+}
+
+
+def _local_text(moment: datetime) -> str:
+    """'16NOV2026 12:07:48 PM' in local time (locale-independent month)."""
+    local = moment.astimezone()
+    return f"{gmp_date(local.date())} {local.strftime('%I:%M:%S %p').lstrip('0')}"
 
 
 def _new_workbook() -> Workbook:
@@ -453,10 +641,94 @@ class DoorEventRecorder:
             approximate=bool(opened and (opened[1] or opened[2])),
         )
 
-    def on_started(self) -> None:
-        """One row per sentinel (re)start, so gaps in monitoring are visible."""
+    def on_started(self, version: str = "", fingerprint: str = "", clock: str = "") -> None:
+        """One row per sentinel (re)start, so gaps in monitoring are visible.
+
+        After an unexpected stop (power cut, crash) a DATA GAP row first states the
+        period nothing was monitored; the STARTED row then records the software
+        version, configuration fingerprint and clock-sync status for traceability.
+        """
+        ledger = self._log.ledger
+        previous = ledger.previous_run(EVENT_STOPPED) if ledger is not None else PreviousRun("none", None)
+        now_utc = datetime.now(timezone.utc)
+        down_for = (
+            (now_utc - previous.last_seen_utc).total_seconds() if previous.last_seen_utc is not None else None
+        )
+        if previous.kind == "unexpected" and down_for is not None:
+            self._log.log_event(
+                airlock="",
+                door="",
+                event=EVENT_GAP,
+                tag="",
+                raw_value=None,
+                plc="",
+                detail=(
+                    f"Nothing was monitored from about {_local_text(previous.last_seen_utc)} to "
+                    f"{_local_text(now_utc)} ({format_duration(down_for)}). "
+                    "Sentinel ended unexpectedly (power cut or crash)."
+                ),
+            )
+        parts = []
+        if version:
+            parts.append(f"Version {version}")
+        if fingerprint:
+            parts.append(f"Config {fingerprint}")
+        if clock:
+            parts.append(_CLOCK_TEXT.get(clock, _CLOCK_TEXT["unknown"]))
+        if previous.kind == "clean" and down_for is not None:
+            parts.append(f"Stopped normally, down for {format_duration(down_for)}")
+        elif previous.kind == "none" and ledger is not None:
+            parts.append("First start on record")
         self._log.log_event(
-            airlock="", door="", event=EVENT_STARTED, tag="", raw_value=None, plc=""
+            airlock="", door="", event=EVENT_STARTED, tag="", raw_value=None, plc="", detail=" | ".join(parts)
+        )
+
+    def on_stopped(self) -> None:
+        """Written on a normal shutdown, so a later restart can tell it from a crash."""
+        self._log.log_event(
+            airlock="",
+            door="",
+            event=EVENT_STOPPED,
+            tag="",
+            raw_value=None,
+            plc="",
+            detail="Normal shutdown (service stop, restart or reboot)",
+        )
+
+    # -- alert sink (see alerts.AlertMonitor) ----------------------------------------
+
+    def on_interlock(
+        self, group: str, doors: list[tuple[str, DoorConfig]], duration_s: float | None, started: bool
+    ) -> None:
+        count = len(doors)
+        if started:
+            detail = (
+                "Both doors were open at the same time"
+                if count == 2
+                else f"{count} doors were open at the same time"
+            )
+        else:
+            detail = "At most one door of this airlock is open again"
+        self._log.log_event(
+            airlock=doors[0][1].airlock,
+            door=" + ".join(d.object_name for _, d in doors),
+            event=EVENT_INTERLOCK if started else EVENT_INTERLOCK_CLEARED,
+            tag=", ".join(d.tag for _, d in doors),
+            raw_value=None,
+            plc=doors[0][0],
+            duration_s=duration_s,
+            detail=detail,
+        )
+
+    def on_chatter(self, plc_id: str, door: DoorConfig, changes: int, window_s: float) -> None:
+        self._log.log_event(
+            airlock=door.airlock,
+            door=door.object_name,
+            event=EVENT_CHATTER,
+            tag=door.tag,
+            raw_value=None,
+            plc=plc_id,
+            detail=f"{changes} open/close changes within {format_duration(window_s)} - check the door switch and wiring",
         )
 
     def on_comm_change(self, plc_id: str, faulted: bool) -> None:

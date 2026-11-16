@@ -72,6 +72,38 @@ class EventLogConfig(BaseModel):
         default="xlsx",
         description="'xlsx' = Excel workbook per day (default); 'csv' = plain CSV per day.",
     )
+    ledger_directory: str | None = Field(
+        default=None,
+        description=(
+            "Folder for the tamper-evident ledger (one hash-chained line per event). Keep it "
+            "somewhere the desktop user cannot write, e.g. /var/lib/sentinel/ledger. "
+            "Default: a hidden '.ledger' folder inside 'directory'."
+        ),
+    )
+    read_only_past_days: bool = Field(
+        default=True,
+        description="Mark each finished day's file read-only so it is not edited by accident.",
+    )
+
+
+class AlertsConfig(BaseModel):
+    """``alerts:`` section -- conditions that are logged and flashed on the cockpit."""
+
+    interlock_violation: bool = Field(
+        default=True,
+        description="Log/flash when two doors of the same airlock are open at the same time.",
+    )
+    interlock_hold_s: float = Field(
+        default=1.0,
+        ge=0,
+        description="Both doors must stay open this long before it counts (ignores hand-over overlap).",
+    )
+    chatter_changes: int = Field(
+        default=8,
+        ge=2,
+        description="A door that changes state this many times within chatter_window_s is flagged.",
+    )
+    chatter_window_s: float = Field(default=30.0, gt=0)
 
 
 class BACnetConfig(BaseModel):
@@ -135,6 +167,14 @@ class DoorConfig(BaseModel):
     airlock: str = Field(
         default="",
         description="Airlock/zone label shown in the event log (e.g. 'N1051/N1054/N1055').",
+    )
+    interlock_group: str | None = Field(
+        default=None,
+        description=(
+            "Doors with the same interlock_group must never be open together. Default: the "
+            "airlock label, except combined labels containing '/' are split by room number "
+            "(N1051A + N1051B share a group). Set to '' to exclude a door from the check."
+        ),
     )
     ajar_timer_tag: str | None = Field(
         default=None,
@@ -211,6 +251,7 @@ class AppConfig(BaseModel):
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     event_log: EventLogConfig = Field(default_factory=EventLogConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     # Optional so the event-log-only mode (--log-only) needs no BMS settings;
     # main.py requires it for the normal BACnet daemon.
     bacnet: BACnetConfig | None = None

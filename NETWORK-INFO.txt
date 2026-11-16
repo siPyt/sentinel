@@ -73,6 +73,12 @@ NOTES
 - LIVE COCKPIT: read-only status page served by sentinel on 127.0.0.1:8080 (loopback only,
   not reachable from the network). Desktop icon "Sentinel Cockpit" opens it in a Chromium
   app window; the browser proxy policies bypass localhost so no internet password is asked.
+- SENTINEL DEMO: desktop icon that opens the same cockpit with SIMULATED doors (port 8081,
+  launcher /opt/sentinel/sentinel-demo.sh, config /opt/sentinel/config.demo.yaml). It reads no
+  PLC and writes no logs; closing its window stops it. The real service is not affected.
+- INTEGRITY LEDGER: /var/lib/sentinel/ledger/ledger.jsonl (written only by the sentinel user,
+  world-readable). Verify the day files against it with:
+  sudo -u sentinel /opt/sentinel/.venv/bin/python -m sentinel --config /opt/sentinel/config.yaml --verify-logs
 - INTERNET GATE (Pi desktop / VNC): browsing from the Pi requires a username and password.
   Chromium and Firefox are forced through a local authenticating proxy (tinyproxy on
   127.0.0.1:8888, config /etc/tinyproxy/tinyproxy.conf, root-only), and an nftables rule

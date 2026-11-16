@@ -47,6 +47,10 @@ ProtectSystem=strict
 #   sudo chown sentinel:admin /home/admin/Desktop/AirlockLogs && sudo chmod 2775 /home/admin/Desktop/AirlockLogs
 ProtectHome=read-only
 ReadWritePaths=-/home/admin/Desktop/AirlockLogs
+# Tamper-evident ledger (event_log.ledger_directory: /var/lib/sentinel/ledger). Only the sentinel
+# user can write there; everyone can read it, so `--verify-logs` works for the desktop user too.
+StateDirectory=sentinel
+StateDirectoryMode=0755
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

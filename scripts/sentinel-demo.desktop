@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sentinel Demo
+Comment=Sentinel cockpit with simulated doors (no PLC, no logs)
+Exec=/opt/sentinel/sentinel-demo.sh
+Icon=/usr/share/pixmaps/sentinel-demo.png
+Terminal=false
+Categories=Utility;

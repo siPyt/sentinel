@@ -25,9 +25,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from sentinel import __version__
+from sentinel.alerts import AlertMonitor
 from sentinel.config import AppConfig, configure_logging, load_config
 from sentinel.dashboard import StatusBoard, publish, run_demo_feed, start_dashboard
 from sentinel.event_log import DoorEventRecorder, EventLogger
+from sentinel.integrity import Ledger, clock_status, config_fingerprint, ledger_directory
 from sentinel.plc_poller import PLCPoller, PollResult
 from sentinel.state_manager import StateManager
 
@@ -45,6 +48,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Open the live cockpit with SIMULATED doors and events -- for seeing the layout "
             "without a PLC. Nothing is read from a PLC or written to the logs."
+        ),
+    )
+    parser.add_argument(
+        "--verify-logs",
+        action="store_true",
+        help=(
+            "Check every daily log file against the tamper-evident ledger and print PASS or "
+            "FAIL with the differences. Reads only; run it as the sentinel user on the Pi."
         ),
     )
     parser.add_argument(
@@ -94,18 +105,32 @@ async def _sleep_or_stop(stop_event: asyncio.Event, seconds: float) -> None:
 def _build_event_logger(config: AppConfig) -> EventLogger | None:
     if not config.event_log.enabled:
         return None
+    ledger = None
+    try:
+        ledger = Ledger(ledger_directory(config))
+    except OSError as exc:
+        # Keep logging (the day files are still useful) but say loudly that rows
+        # are no longer chained -- the cockpit shows the ledger as OFF.
+        logger.error("Integrity ledger DISABLED: cannot use %s (%s)", ledger_directory(config), exc)
     try:
         event_logger = EventLogger(
             config.event_log.directory,
             config.event_log.file_prefix,
             config.event_log.format,
             auto_flush=False,  # run_daemon flushes once per poll cycle, off the event loop
+            ledger=ledger,
+            read_only_past_days=config.event_log.read_only_past_days,
         )
     except OSError as exc:
         logger.error("Event log disabled: cannot use %s (%s)", config.event_log.directory, exc)
         return None
     logger.info("Door events are logged to %s", event_logger.path_for(date.today()).parent)
+    if ledger is not None:
+        logger.info("Integrity ledger: %s (%d records)", ledger.path, ledger.seq)
     return event_logger
+
+
+HEARTBEAT_EVERY_S = 60.0
 
 
 async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
@@ -119,6 +144,8 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
     event_logger = _build_event_logger(config)
     board = StatusBoard(config, event_logger) if config.dashboard.enabled else None
     if board is not None and event_logger is not None:
+        if event_logger.ledger is not None:
+            board.load_health_history(event_logger.ledger.path)  # before this run adds its own rows
         event_logger.add_listener(board.on_event)
     cockpit = None
     if board is not None:
@@ -129,12 +156,19 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                          config.dashboard.bind, config.dashboard.port, exc)
     recorder = DoorEventRecorder(event_logger) if event_logger is not None else None
     if recorder is not None:
-        recorder.on_started()
+        recorder.on_started(__version__, config_fingerprint(config), clock_status())
+    monitor = AlertMonitor(config, sink=recorder)
 
     pollers: dict[str, PLCPoller] = {plc.id: PLCPoller(plc) for plc in config.plcs}
+
+    def on_transition(plc_id, door, is_open, raw, is_initial) -> None:
+        if recorder is not None:
+            recorder.on_transition(plc_id, door, is_open, raw, is_initial)
+        monitor.on_transition(plc_id, door, is_initial)
+
     state_manager = StateManager(
         config.plcs,
-        recorder.on_transition if recorder else None,
+        on_transition,
         recorder.on_comm_change if recorder else None,
     )
 
@@ -153,6 +187,8 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
         await bacnet.start()
     poll_interval_s = config.service.poll_interval_ms / 1000.0
     fault_threshold_polls = config.service.fault_threshold_polls
+    last_beat = float("-inf")
+    stopped_normally = False
 
     try:
         while not stop_event.is_set():
@@ -177,6 +213,12 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                             if timer is not None and timer.value is not None:
                                 recorder.on_timer(plc.id, door, timer.value)
 
+            monitor.evaluate(
+                {
+                    (s.plc_id, s.config.tag): (s.debounced_open if s.reliable else None)
+                    for s in state_manager.doors()
+                }
+            )
             if bacnet is not None:
                 for door_state in state_manager.doors():
                     bacnet.set_door_state(
@@ -186,14 +228,25 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                     )
             if board is not None:
                 publish(board, config, results_by_plc, state_manager, pollers)
+                board.set_alerts(monitor.snapshot())
             if event_logger is not None and event_logger.has_pending:
                 await asyncio.to_thread(event_logger.flush_pending)
+            if event_logger is not None and event_logger.ledger is not None:
+                if cycle_start - last_beat >= HEARTBEAT_EVERY_S:
+                    last_beat = cycle_start
+                    try:
+                        event_logger.ledger.touch_heartbeat()
+                    except OSError:
+                        logger.debug("could not write the heartbeat", exc_info=True)
 
             elapsed = time.monotonic() - cycle_start
             await _sleep_or_stop(stop_event, max(0.0, poll_interval_s - elapsed))
+        stopped_normally = True
     finally:
         logger.info("sentinel shutting down")
         await asyncio.gather(*(p.close() for p in pollers.values()), return_exceptions=True)
+        if recorder is not None and stopped_normally:
+            recorder.on_stopped()  # a crash must NOT write this, so the next start reports a gap
         if event_logger is not None:
             event_logger.flush_pending()  # don't lose events queued in the final cycle
         if cockpit is not None:
@@ -293,6 +346,20 @@ def _render_plc_test_table(config: AppConfig, results: list[PollResult]) -> None
     sys.stdout.flush()
 
 
+def run_verify_logs(config: AppConfig) -> int:
+    from sentinel.verify import verify_logs
+
+    ledger_path = ledger_directory(config) / "ledger.jsonl"
+    event_logger = EventLogger(
+        config.event_log.directory, config.event_log.file_prefix, config.event_log.format, auto_flush=False
+    )
+    report = verify_logs(ledger_path, event_logger)
+    print(f"Ledger file    : {ledger_path}")
+    print(f"Day files in   : {event_logger.directory}")
+    print(report.render())
+    return 0 if report.ok else 2
+
+
 def cli_main() -> None:
     args = build_arg_parser().parse_args()
 
@@ -304,6 +371,9 @@ def cli_main() -> None:
     except ValidationError as exc:
         print(f"error: invalid configuration in {args.config}:\n{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+
+    if args.verify_logs:
+        raise SystemExit(run_verify_logs(config))
 
     configure_logging(config.service.log_level)
 

@@ -96,14 +96,14 @@ explaining every column and event.
 (`03NOV2026.xlsx` .. `16NOV2026.xlsx`) showing what real files look like (rebuild them
 with `python scripts/make_example_log.py`). Columns:
 
-| Date | Time | Airlock | Door | What Happened | Open For | Tag Polled | Raw Value | PLC | Open Seconds |
-|------|------|---------|------|---------------|----------|------------|-----------|-----|--------------|
+| Date | Time | Airlock | Door | What Happened | Open For | Details | Tag Polled | Raw Value | PLC | Open Seconds | UTC Time | Rec # | Check Code |
+|------|------|---------|------|---------------|----------|---------|------------|-----------|-----|--------------|----------|-------|------------|
 
 - `What Happened` is `OPENED` or `CLOSED`, `LEFT OPEN - TIMED OUT`, `PLC OFFLINE` or
-  `PLC BACK ONLINE` (so a gap in the log is never mistaken for "nothing happened").
-  `SENTINEL STARTED` is written once each time sentinel (re)starts, e.g. after a power
-  cut, because it was not watching the doors before that. Door states are not logged at
-  startup, except a door that is already open: `OPENED (at startup)`.
+  `PLC BACK ONLINE` (so a gap in the log is never mistaken for "nothing happened"), plus
+  the warnings described under [Warnings and continuity](#warnings-and-continuity).
+  Door states are not logged at startup, except a door that is already open:
+  `OPENED (at startup)`.
 - `LEFT OPEN - TIMED OUT` is logged the moment the PLC's own 30 s door-ajar timer
   (`Door_Nxxxx_Timer.DN`, set per door with `ajar_timer_tag`) finishes, i.e. the door was
   left open too long and the airlock alarm latched.
@@ -132,17 +132,57 @@ python -m sentinel --config config.yaml --log-only   # Excel event log only, no 
 Omit `--log-only` to run the BACnet bridge and the event log together. Under systemd,
 create the log folder as described in [systemd/sentinel.service](systemd/sentinel.service).
 
+## Warnings and continuity
+
+All of these are rule-based (no trained models), configured under `alerts:` /
+`event_log:` in the config, written as rows in the day file, and shown on the cockpit.
+
+| Event | Meaning |
+|-------|---------|
+| `INTERLOCK VIOLATION` / `INTERLOCK CLEARED` | Two doors of one airlock open together for at least `interlock_hold_s` (default 1 s). The group defaults to the airlock label, with combined labels such as `N1051/N1054/N1055` split by room number; override per door with `interlock_group`. `CLEARED` carries how long it lasted. |
+| `DOOR CHATTERING` | A door changed state `chatter_changes` times (default 8) within `chatter_window_s` (30 s): usually a failing switch or wiring. Logged once per burst. |
+| `SENTINEL STARTED` | Each (re)start. `Details` holds the software version, the configuration fingerprint, whether the clock is synchronised to a time server, and how long it was down. |
+| `SENTINEL STOPPED` | A normal shutdown. A crash or power cut never writes this, so the next start can tell the difference. |
+| `DATA GAP` | Written at start after an unexpected stop: the period during which nothing was monitored (dated from a once-a-minute heartbeat). |
+
+**Tamper evidence.** Every row also goes into `ledger.jsonl`, one fsync'd line per event
+carrying the SHA-256 of the previous line, and gets a record number (`Rec #`), a `Check
+Code` and a `UTC Time` in its day file. Put the ledger where the desktop user cannot write
+(`event_log.ledger_directory`, `/var/lib/sentinel/ledger` on the Pi). Finished days are also
+marked read-only. Check everything with:
+
+```bash
+sudo -u sentinel /opt/sentinel/.venv/bin/python -m sentinel --config /opt/sentinel/config.yaml --verify-logs
+```
+
+It prints PASS or FAIL: edited, deleted or inserted rows, a broken chain, or missing files
+are listed by name. It also prints the ledger **head code**; note it in a controlled record,
+because removing the newest ledger records can only be caught by comparing against it.
+Limits: this detects changes, it does not stop someone with root access, and a day file
+set aside as unreadable shows up as "missing" in the report.
+
 ## Live cockpit
 
 Sentinel serves a read-only status page on the Pi itself (`http://127.0.0.1:8080/`,
 loopback only, configured by the `dashboard:` section). It shows PLC online/offline,
 every door as a CLOSED / OPEN / LEFT OPEN - TIMED OUT / UNKNOWN tile grouped by
-airlock, a "needs attention" box, recent events and system health. It reads sentinel's
-in-memory state, so it opens **no extra PLC connection** and cannot write to the PLC
-or the logs. On the Pi, use the **Sentinel Cockpit** desktop icon.
+airlock, a "needs attention" box, a flashing alarm bar for interlock violations and doors
+left open (visual only; *Silence flashing* only affects that window), recent events and
+system health (PLC link, ledger, clock-sync status). It reads sentinel's in-memory state,
+so it opens **no extra PLC connection** and cannot write to the PLC or the logs. On the
+Pi, use the **Sentinel Cockpit** desktop icon.
+
+Each door tile carries a **health heart** from the last 7 days of events: green (healthy)
+through yellow and orange to a red broken heart (unhealthy). It deducts for chatter
+alerts, interlock violations, the share of openings that timed out, and open times that
+have drifted much longer than the earlier week; hover a door to see the reasons. It is
+advisory only: it is never written to the logs and never changes an alarm.
 
 `python -m sentinel --config config.yaml --demo` serves the same page with simulated
-doors on port 8081 (clearly bannered DEMO, no PLC access, no log files written).
+doors on port 8081 (clearly bannered DEMO, no PLC access, no log files written). It opens
+with a staged scene (interlock violation, chattering switch, door left open, broken hearts)
+for screenshots. On the Pi, use the **Sentinel Demo** desktop icon
+([scripts/sentinel-demo.sh](scripts/sentinel-demo.sh)).
 
 ## Project layout
 
@@ -152,6 +192,10 @@ src/sentinel/
   plc_poller.py      Southbound pylogix CIP polling
   state_manager.py   Invert/debounce/pulse-stretch conditioning
   event_log.py       Daily door-event log (Excel .xlsx / CSV)
+  integrity.py       Hash-chained ledger, heartbeat, clock status
+  verify.py          --verify-logs (day files vs ledger)
+  alerts.py          Interlock-violation and chatter detection
+  health.py          Per-door health heart (rule-based, advisory)
   dashboard.py       Read-only live cockpit HTTP server + demo feed
   dashboard_page.py  Cockpit HTML/JS page
   bacnet_server.py   Northbound bacpypes3 BACnet/IP server

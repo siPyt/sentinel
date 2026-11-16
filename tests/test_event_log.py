@@ -37,11 +37,13 @@ def test_daily_files_and_columns(tmp_path):
     day1 = _rows(tmp_path / "16NOV2026.csv")
     day2 = _rows(tmp_path / "17NOV2026.csv")
     assert day1[0] == list(HEADER)
-    assert day1[1] == [
-        "2026-11-16", "23:59:59", "N1065", "DOOR_N1065A", "OPENED", "",
+    # no ledger here, so Rec # and Check Code stay blank; the UTC column is always filled
+    assert day1[1][:11] == [
+        "2026-11-16", "23:59:59", "N1065", "DOOR_N1065A", "OPENED", "", "",
         "Local:10:I.Data.0", "0", "plc1", "",
     ]
-    assert day2[1][4] == "CLOSED" and day2[1][7] == "1"
+    assert day1[1][11].endswith(" UTC") and day1[1][12:] == ["", ""]
+    assert day2[1][4] == "CLOSED" and day2[1][8] == "1"
 
 
 def test_gmp_date_file_names(tmp_path):
@@ -90,11 +92,12 @@ def test_xlsx_daily_workbook_has_typed_cells_and_appends(tmp_path):
     rows = list(events.iter_rows(values_only=True))
     assert list(rows[0]) == list(HEADER) and len(rows) == 3
     assert rows[1][:2] == (datetime(2026, 11, 16), dtime(9, 5, 7, 250000))  # real date + time cells
-    assert rows[1][4:8] == ("OPENED", None, "Local:10:I.Data.0", 0)
-    assert rows[2][4:7] == ("CLOSED", "1 min 1 sec", "Local:10:I.Data.0")
-    assert rows[2][7:] == (1, "plc1", 61.3)
+    assert rows[1][4:8] == ("OPENED", None, None, "Local:10:I.Data.0")
+    assert rows[1][8] == 0
+    assert rows[2][4:8] == ("CLOSED", "1 min 1 sec", None, "Local:10:I.Data.0")
+    assert rows[2][8:11] == (1, "plc1", 61.3)
     assert "Note" not in rows[0]
-    assert events.freeze_panes == "C2" and events.auto_filter.ref == "A1:J3"
+    assert events.freeze_panes == "C2" and events.auto_filter.ref == "A1:N3"
     assert events["E3"].fill.start_color.rgb.endswith("C6E0B4")  # CLOSED rows are green
     assert events["A3"].number_format == "dd-mmm-yyyy" and events["B3"].number_format == "h:mm:ss AM/PM"
     assert events["A3"].fill.fill_type is None  # routine rows: only the event cell is coloured
@@ -163,7 +166,7 @@ def _recorder(tmp_path):
 
 def _events(tmp_path):
     rows = _rows(next(tmp_path.glob("*.csv")))[1:]
-    return [(r[4], r[5], r[9], r[6]) for r in rows]  # event, open for, seconds, tag
+    return [(r[4], r[5], r[10], r[7]) for r in rows]  # event, open for, seconds, tag
 
 
 def test_open_duration_and_timer_done_events(tmp_path):
