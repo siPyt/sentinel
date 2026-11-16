@@ -204,7 +204,8 @@ crashed or the PLC was offline are not learned from):
 
 Findings are `alert` / `watch` / `info`, each with the numbers behind it (what was seen, what is
 usual) and a suggested check. They appear on the cockpit's **Learning** card (progress toward day 180
-plus the latest findings, with an *ML FLAG* marker on the door) and in a weekly Excel report,
+plus the latest findings, with an *ML FLAG* marker on the door) and in a weekly Excel report
+(the first once there is a week of data),
 `ML-Reports/ML-Report-<date>.xlsx` (Summary, Findings, Door baselines, How to read), kept apart from
 the GMP day files. State and the model details (`model_info.json`: library versions, training size,
 ledger head code) are in `/var/lib/sentinel/ml/`; `history.csv` keeps one row per door per night so

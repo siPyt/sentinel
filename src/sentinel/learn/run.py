@@ -80,7 +80,7 @@ def run_learning(config: AppConfig, now: datetime | None = None, force_report: b
         _append_history(folder, analysis, today)
 
     written: list[str] = []
-    if dataset.records:
+    if dataset.records and (force_report or analysis.progress["days"] >= 7):  # nothing worth reporting before that
         reports = report_directory(config)
         stamp = now.strftime("%Y-%m-%d %H:%M:%S")
         last = _latest_report_day(reports, "ML-Report-")
