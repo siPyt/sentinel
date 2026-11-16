@@ -80,11 +80,7 @@ NOTES
   reaching anything except 192.168.1.0/24 directly. The credentials are in
   LOGIN-INFO-local-only.txt (never committed). Proxy requests are logged in
   /var/log/tinyproxy/tinyproxy.log. Not affected: the sentinel service, root/apt, SSH, VNC.
-  To change the password or remove the gate, first unlock the files:
-  sudo chattr -i /etc/tinyproxy/tinyproxy.conf /etc/nftables.d/sentinel-internet-gate.nft
-  /etc/nftables.conf /etc/chromium/policies/managed/internet-gate.json
-  /etc/firefox/policies/policies.json (re-run chattr +i afterwards). Then to remove:
-  sudo nft delete table inet sentinel_gate; delete the .nft file; sudo systemctl
+  To remove: sudo nft delete table inet sentinel_gate; delete the .nft file; sudo systemctl
   disable --now tinyproxy; delete /etc/chromium/policies/managed/internet-gate.json and
   /etc/firefox/policies/policies.json.
 - PLC IPs and the BACnet bind address are still placeholders from
