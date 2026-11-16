@@ -70,6 +70,16 @@ BACNET/IP SERVER (Siemens Apogee / Insight BMS side, UDP port 47808)
 
 NOTES
 -----
+- INTERNET GATE (Pi desktop / VNC): browsing from the Pi requires a username and password.
+  Chromium and Firefox are forced through a local authenticating proxy (tinyproxy on
+  127.0.0.1:8888, config /etc/tinyproxy/tinyproxy.conf, root-only), and an nftables rule
+  (/etc/nftables.d/sentinel-internet-gate.nft) blocks the desktop user (uid 1000) from
+  reaching anything except 192.168.1.0/24 directly. The credentials are in
+  LOGIN-INFO-local-only.txt (never committed). Proxy requests are logged in
+  /var/log/tinyproxy/tinyproxy.log. Not affected: the sentinel service, root/apt, SSH, VNC.
+  To remove: sudo nft delete table inet sentinel_gate; delete the .nft file; sudo systemctl
+  disable --now tinyproxy; delete /etc/chromium/policies/managed/internet-gate.json and
+  /etc/firefox/policies/policies.json.
 - PLC IPs and the BACnet bind address are still placeholders from
   config.example.yaml, not yet confirmed against real site hardware.
   Update this file (and config.yaml) once real PLC IPs are known.
