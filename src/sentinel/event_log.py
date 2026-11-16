@@ -55,10 +55,10 @@ HEADER: tuple[str, ...] = (
 EVENT_OPENED = "OPENED"
 EVENT_CLOSED = "CLOSED"
 EVENT_OPENED_AT_STARTUP = "OPENED (at startup)"
-EVENT_CLOSED_AT_STARTUP = "CLOSED (at startup)"
 EVENT_TIMED_OUT = "LEFT OPEN - TIMED OUT"
 EVENT_PLC_OFFLINE = "PLC OFFLINE"
 EVENT_PLC_ONLINE = "PLC BACK ONLINE"
+EVENT_STARTED = "SENTINEL STARTED"
 
 # One typed log row, in column order: date, time, airlock, door, event,
 # "open for" text, tag, raw 0/1, plc, open seconds.
@@ -76,14 +76,14 @@ _EVENT_STYLES: dict[str, tuple[str, str]] = {
     EVENT_OPENED: _OPENED_STYLE,
     EVENT_OPENED_AT_STARTUP: _OPENED_STYLE,
     EVENT_CLOSED: _CLOSED_STYLE,
-    EVENT_CLOSED_AT_STARTUP: _CLOSED_STYLE,
     EVENT_TIMED_OUT: ("F4B084", "C00000"),
     EVENT_PLC_OFFLINE: ("D0CECE", "3B3838"),
     EVENT_PLC_ONLINE: ("BDD7EE", "1F4E79"),
+    EVENT_STARTED: ("D9D2E9", "4B2C83"),
 }
 # Routine events colour only the "What Happened" cell so a long day stays easy to
 # scan; these need attention, so their whole row is highlighted.
-_FULL_ROW_EVENTS = {EVENT_TIMED_OUT, EVENT_PLC_OFFLINE, EVENT_PLC_ONLINE}
+_FULL_ROW_EVENTS = {EVENT_TIMED_OUT, EVENT_PLC_OFFLINE, EVENT_PLC_ONLINE, EVENT_STARTED}
 
 KEY_ROWS: tuple[tuple[str, str], ...] = (
     (EVENT_OPENED, "The door was opened (confirmed by the PLC door-position input)."),
@@ -94,7 +94,16 @@ KEY_ROWS: tuple[tuple[str, str], ...] = (
         "airlock alarm latched. 'Open For' shows how long it had been open so far "
         "(blank if it was already open when sentinel started).",
     ),
-    ("OPENED / CLOSED (at startup)", "The state of the door when sentinel started. Written once per door at startup."),
+    (
+        EVENT_STARTED,
+        "Sentinel (re)started, e.g. after a power cut or reboot. It was not watching the doors "
+        "before this row, so anything earlier in the day may be missing.",
+    ),
+    (
+        EVENT_OPENED_AT_STARTUP,
+        "The door was already open when sentinel started. Only open doors are listed; doors "
+        "that were closed at startup are not logged.",
+    ),
     (EVENT_PLC_OFFLINE, "The Pi lost contact with the PLC. Door states are unknown until it reconnects."),
     (EVENT_PLC_ONLINE, "The Pi regained contact with the PLC."),
     ("Date / Time", "When it happened, in the Pi's local time (Central)."),
@@ -396,8 +405,10 @@ class DoorEventRecorder:
                 duration = self._clock() - opened[0]
                 # Open at startup, or the PLC dropped off meanwhile: the time is a best guess.
                 approximate = bool(opened[1] or opened[2])
+        if is_initial and not is_open:
+            return  # first reading of a closed door is a baseline, not an event
         if is_initial:
-            event = EVENT_OPENED_AT_STARTUP if is_open else EVENT_CLOSED_AT_STARTUP
+            event = EVENT_OPENED_AT_STARTUP
         else:
             event = EVENT_OPENED if is_open else EVENT_CLOSED
         self._log.log_event(
@@ -430,6 +441,12 @@ class DoorEventRecorder:
             plc=plc_id,
             duration_s=None if opened is None else self._clock() - opened[0],
             approximate=bool(opened and (opened[1] or opened[2])),
+        )
+
+    def on_started(self) -> None:
+        """One row per sentinel (re)start, so gaps in monitoring are visible."""
+        self._log.log_event(
+            airlock="", door="", event=EVENT_STARTED, tag="", raw_value=None, plc=""
         )
 
     def on_comm_change(self, plc_id: str, faulted: bool) -> None:

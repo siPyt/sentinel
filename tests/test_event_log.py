@@ -10,6 +10,7 @@ from sentinel.event_log import (
     EVENT_OPENED,
     EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
+    EVENT_STARTED,
     EVENT_TIMED_OUT,
     HEADER,
     DoorEventRecorder,
@@ -181,6 +182,15 @@ def test_open_duration_and_timer_done_events(tmp_path):
         (EVENT_TIMED_OUT, "31 sec", "31.2", "Door_N1051A_Timer.DN"),
         (EVENT_CLOSED, "1 hr 0 min 3 sec", "3603.0", "Local:9:I.Data.0"),
     ]
+
+
+def test_startup_logs_one_marker_and_only_open_doors(tmp_path):
+    recorder, clock, door = _recorder(tmp_path)
+    recorder.on_started()
+    recorder.on_transition("plc1", door, False, True, True)  # closed at startup: baseline only
+    assert [e[0] for e in _events(tmp_path)] == [EVENT_STARTED]
+    recorder.on_transition("plc1", door, True, False, False)  # a later, real open still logs
+    assert [e[0] for e in _events(tmp_path)] == [EVENT_STARTED, EVENT_OPENED]
 
 
 def test_startup_states_and_approximate_durations(tmp_path):

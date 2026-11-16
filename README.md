@@ -101,8 +101,9 @@ with `python scripts/make_example_log.py`). Columns:
 
 - `What Happened` is `OPENED` or `CLOSED`, `LEFT OPEN - TIMED OUT`, `PLC OFFLINE` or
   `PLC BACK ONLINE` (so a gap in the log is never mistaken for "nothing happened").
-  The state of every door at startup is logged once as `OPENED (at startup)` /
-  `CLOSED (at startup)`.
+  `SENTINEL STARTED` is written once each time sentinel (re)starts, e.g. after a power
+  cut, because it was not watching the doors before that. Door states are not logged at
+  startup, except a door that is already open: `OPENED (at startup)`.
 - `LEFT OPEN - TIMED OUT` is logged the moment the PLC's own 30 s door-ajar timer
   (`Door_Nxxxx_Timer.DN`, set per door with `ajar_timer_tag`) finishes, i.e. the door was
   left open too long and the airlock alarm latched.

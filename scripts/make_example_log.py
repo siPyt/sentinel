@@ -20,10 +20,11 @@ from openpyxl.styles import Font, PatternFill
 from sentinel.config import load_config
 from sentinel.event_log import (
     EVENT_CLOSED,
-    EVENT_CLOSED_AT_STARTUP,
     EVENT_OPENED,
+    EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
     EVENT_PLC_ONLINE,
+    EVENT_STARTED,
     EVENT_TIMED_OUT,
     EventLogger,
     gmp_date,
@@ -55,10 +56,21 @@ def build_day(day: date, doors, rng: random.Random, first_day: bool):
     def free(airlock, start, end):
         return not any(b0 < end and start < b1 for b0, b1 in busy[airlock])
 
-    # Only the very first day shows the service starting up and reading every door.
+    # The service starts at the top of the first day.
     if first_day:
-        start = midnight + timedelta(seconds=4.25)
-        events += [(start, d, "startup", None, "") for d in doors]
+        events.append((midnight + timedelta(seconds=4.25), None, "started", None, ""))
+
+    # A mid-month restart (power cut) with a door already open when sentinel came back.
+    if day == date(2026, 11, 11):
+        door = doors[rng.randrange(len(doors))]
+        restart = midnight + timedelta(hours=2, minutes=15, seconds=7.4)
+        closed = restart + timedelta(seconds=21.6)
+        busy[door.airlock].append((restart - timedelta(seconds=30), closed + timedelta(seconds=30)))
+        events += [
+            (restart, None, "started", None, ""),
+            (restart + timedelta(seconds=0.8), door, "open_startup", None, ""),
+            (closed, door, "close_approx", 21.6, ""),
+        ]
 
     # Doors left open past the 30 s timer: a few per weekday, fewer at weekends.
     for _ in range(rng.randint(0, 2) if weekend else rng.randint(2, 5)):
@@ -146,14 +158,19 @@ def write_day(day: date, events) -> Path:
         log = EventLogger(tmp, auto_flush=False)  # one workbook save for the whole day
         for when, door, kind, seconds, _unused in events:
             if door is None:
+                event = {
+                    "started": EVENT_STARTED,
+                    "plc_offline": EVENT_PLC_OFFLINE,
+                    "plc_online": EVENT_PLC_ONLINE,
+                }[kind]
                 log.log_event(
-                    airlock="", door="", tag="", raw_value=None, plc=PLC, when=when,
-                    event=EVENT_PLC_OFFLINE if kind == "plc_offline" else EVENT_PLC_ONLINE,
+                    airlock="", door="", tag="", raw_value=None, when=when, event=event,
+                    plc="" if kind == "started" else PLC,
                 )
                 continue
             common = dict(airlock=door.airlock, door=door.object_name, plc=PLC, when=when)
-            if kind == "startup":
-                log.log_event(event=EVENT_CLOSED_AT_STARTUP, tag=door.tag, raw_value=True, **common)
+            if kind == "open_startup":
+                log.log_event(event=EVENT_OPENED_AT_STARTUP, tag=door.tag, raw_value=False, **common)
             elif kind == "open":
                 log.log_event(event=EVENT_OPENED, tag=door.tag, raw_value=False, **common)
             elif kind == "timer":

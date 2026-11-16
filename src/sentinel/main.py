@@ -108,6 +108,8 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
 
     event_logger = _build_event_logger(config)
     recorder = DoorEventRecorder(event_logger) if event_logger is not None else None
+    if recorder is not None:
+        recorder.on_started()
 
     pollers: dict[str, PLCPoller] = {plc.id: PLCPoller(plc) for plc in config.plcs}
     state_manager = StateManager(
