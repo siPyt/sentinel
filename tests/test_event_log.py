@@ -30,6 +30,16 @@ def test_daily_files_and_columns(tmp_path):
     assert day2[1][4] == "CLOSED" and day2[1][8] == "1"
 
 
+def test_unwritable_folder_is_retried_not_disabled(tmp_path):
+    blocker = tmp_path / "logs"
+    blocker.write_text("a file where the folder should be")
+    log = EventLogger(blocker)  # must not raise
+    log.log_event(airlock="A", door="D", event="OPENED", tag="t", raw_value=False, plc="p")
+    blocker.unlink()  # permissions fixed / folder now creatable
+    log.flush_pending()
+    assert len(_rows(next(blocker.glob("*.csv")))) == 2
+
+
 def test_unwritable_rows_are_retried(tmp_path, monkeypatch):
     log = EventLogger(tmp_path)
     original = EventLogger._append

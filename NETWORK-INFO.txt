@@ -44,8 +44,11 @@ SSH                                       : enabled, password auth (scripts/conf
 
 PLCs (Allen-Bradley RSLogix 5000 v17, EtherNet/IP CIP, TCP port 44818)
 -----------------------------------------------------------------------
-  plc1  CR1_WEST   192.168.1.10   slot 0   [placeholder - not yet confirmed]
-  plc2  CR1_EAST   192.168.1.11   slot 0   [placeholder - not yet confirmed]
+  plc1  SIGMA_ALDRICH 192.168.1.30   slot 0   [IP given by site; NOT reachable from the Pi yet - see below]
+
+  Deployed on the Pi (hostname setinel) as systemd service `sentinel` in --log-only
+  mode (no BACnet until NIC 2 / BMS exist). Daily door-event CSVs are written to
+  /home/admin/Desktop/AirlockLogs. Config: /opt/sentinel/config.yaml.
 
 VNC REMOTE DESKTOP (wayvnc, over eth0 static IP)
 -----------------------------------------------------------------------

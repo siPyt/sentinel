@@ -56,7 +56,12 @@ class EventLogger:
         self._prefix = file_prefix
         self._pending: list[tuple[date, list[str]]] = []
         self._write_error_logged = False
-        self._directory.mkdir(parents=True, exist_ok=True)
+        try:
+            self._directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Don't give up: rows are queued and every flush retries the folder,
+            # so fixing permissions later recovers without a restart.
+            logger.error("Cannot create event log folder %s (%s); will keep retrying", self._directory, exc)
 
     def path_for(self, day: date) -> Path:
         return self._directory / f"{self._prefix}_{day.isoformat()}.csv"

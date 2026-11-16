@@ -103,6 +103,7 @@ class PLCPoller:
         latency_ms = (time.monotonic() - start) * 1000
         readings: dict[str, TagReading] = {}
         all_ok = True
+        timer_results: list[tuple[str, bool, str]] = []
         for resp in responses:
             ok = resp.Status == "Success" and resp.Value is not None
             readings[resp.TagName] = TagReading(
@@ -111,11 +112,16 @@ class PLCPoller:
                 status=resp.Status,
             )
             if resp.TagName in self._timer_tags:
-                # A bad/unreadable timer tag must not blind the door monitoring:
-                # report it once and keep going; its reading stays None.
-                self._track_timer_tag(resp.TagName, ok, resp.Status)
+                # A bad/unreadable timer tag must not blind the door monitoring.
+                timer_results.append((resp.TagName, ok, resp.Status))
             else:
                 all_ok = all_ok and ok
+
+        if all_ok:
+            # Only judge timer tags while the PLC itself is answering; during a
+            # comm outage every tag fails and the comm fault already says so.
+            for tag, ok, status in timer_results:
+                self._track_timer_tag(tag, ok, status)
 
         if not all_ok:
             self._handle_failure("one or more tags returned a non-Success status")

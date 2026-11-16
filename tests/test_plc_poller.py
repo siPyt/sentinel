@@ -49,3 +49,15 @@ def test_bad_door_tag_still_fails_the_plc():
     poller, door = _poller({"Local:9:I.Data.0"})
     result = asyncio.run(poller.poll())
     assert not result.success and result.consecutive_failures == 1
+
+
+def test_unreachable_plc_does_not_warn_per_timer_tag(caplog):
+    poller, door = _poller(set(poller_tags()))
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(poller.poll())
+    assert not result.success
+    assert not any("door-ajar timer tag" in m for m in caplog.messages)
+
+
+def poller_tags():
+    return PLCPoller(load_config(REPO / "config.airlocks.example.yaml").plcs[0])._tags
