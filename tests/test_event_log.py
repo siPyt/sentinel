@@ -1,11 +1,22 @@
 import csv
-from datetime import datetime, time as dtime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from sentinel.config import load_config
-from sentinel.event_log import HEADER, DoorEventRecorder, EventLogger
+from sentinel.event_log import (
+    EVENT_CLOSED,
+    EVENT_OPENED,
+    EVENT_OPENED_AT_STARTUP,
+    EVENT_PLC_OFFLINE,
+    EVENT_TIMED_OUT,
+    HEADER,
+    DoorEventRecorder,
+    EventLogger,
+    format_duration,
+    gmp_date,
+)
 from sentinel.state_manager import StateManager
 
 REPO = Path(__file__).resolve().parent.parent
@@ -22,14 +33,41 @@ def test_daily_files_and_columns(tmp_path):
     log.log_event(event="OPENED", raw_value=False, when=datetime(2026, 11, 16, 23, 59, 59, 5000), **kwargs)
     log.log_event(event="CLOSED", raw_value=True, when=datetime(2026, 11, 17, 0, 0, 3), **kwargs)
 
-    day1 = _rows(tmp_path / "airlock_events_2026-11-16.csv")
-    day2 = _rows(tmp_path / "airlock_events_2026-11-17.csv")
+    day1 = _rows(tmp_path / "16NOV2026.csv")
+    day2 = _rows(tmp_path / "17NOV2026.csv")
     assert day1[0] == list(HEADER)
-    assert day1[1][:10] == [
-        "2026-11-16", "23:59:59.005", "N1065", "DOOR_N1065A", "OPENED", "", "",
-        "Local:10:I.Data.0", "0", "plc1",
+    assert day1[1] == [
+        "2026-11-16", "23:59:59", "N1065", "DOOR_N1065A", "OPENED", "",
+        "Local:10:I.Data.0", "0", "plc1", "",
     ]
-    assert day2[1][4] == "CLOSED" and day2[1][8] == "1"
+    assert day2[1][4] == "CLOSED" and day2[1][7] == "1"
+
+
+def test_gmp_date_file_names(tmp_path):
+    assert [gmp_date(date(2026, m, 5)) for m in (1, 3, 9, 11, 12)] == [
+        "05JAN2026", "05MAR2026", "05SEP2026", "05NOV2026", "05DEC2026",
+    ]
+    assert EventLogger(tmp_path).path_for(date(2026, 11, 16)).name == "16NOV2026.xlsx"
+    assert EventLogger(tmp_path, "airlocks").path_for(date(2026, 11, 3)).name == "airlocks_03NOV2026.xlsx"
+
+
+def test_batched_flush_writes_all_rows_in_one_save(tmp_path):
+    log = EventLogger(tmp_path, auto_flush=False)
+    for second in range(5):
+        log.log_event(
+            airlock="A", door="D", event=EVENT_OPENED, tag="t", raw_value=False, plc="p",
+            when=datetime(2026, 11, 16, 8, 0, second),
+        )
+    assert log.has_pending and not list(tmp_path.glob("*.xlsx"))
+    log.flush_pending()
+    assert not log.has_pending
+    assert load_workbook(tmp_path / "16NOV2026.xlsx")["Events"].max_row == 6
+
+
+def test_duration_wording():
+    assert [format_duration(s) for s in (8.7, 59.6, 283.3, 3603.0, 4338.4)] == [
+        "9 sec", "1 min 0 sec", "4 min 43 sec", "1 hr 0 min 3 sec", "1 hr 12 min 18 sec",
+    ]
 
 
 def test_xlsx_daily_workbook_has_typed_cells_and_appends(tmp_path):
@@ -41,26 +79,44 @@ def test_xlsx_daily_workbook_has_typed_cells_and_appends(tmp_path):
         when=datetime(2026, 11, 16, 9, 6, 8, 590000), **kwargs,
     )
     log.log_event(
-        airlock="", door="", event="PLC COMM LOST", tag="", raw_value=None, plc="plc1",
+        airlock="", door="", event=EVENT_PLC_OFFLINE, tag="", raw_value=None, plc="plc1",
         when=datetime(2026, 11, 17, 0, 0, 1),
     )
 
-    workbook = load_workbook(tmp_path / "airlock_events_2026-11-16.xlsx")
+    workbook = load_workbook(tmp_path / "16NOV2026.xlsx")
     assert workbook.sheetnames == ["Events", "Key"]
     events = workbook["Events"]
     rows = list(events.iter_rows(values_only=True))
     assert list(rows[0]) == list(HEADER) and len(rows) == 3
     assert rows[1][:2] == (datetime(2026, 11, 16), dtime(9, 5, 7, 250000))  # real date + time cells
-    assert rows[1][4:9] == ("OPENED", None, None, "Local:10:I.Data.0", 0)
-    assert rows[2][4:9] == ("CLOSED", "0:01:01", 61.3, "Local:10:I.Data.0", 1)
-    assert events.freeze_panes == "A2" and events.auto_filter.ref == "A1:K3"
-    assert events["A3"].fill.start_color.rgb.endswith("E2EFDA")  # CLOSED rows are green
+    assert rows[1][4:8] == ("OPENED", None, "Local:10:I.Data.0", 0)
+    assert rows[2][4:7] == ("CLOSED", "1 min 1 sec", "Local:10:I.Data.0")
+    assert rows[2][7:] == (1, "plc1", 61.3)
+    assert "Note" not in rows[0]
+    assert events.freeze_panes == "C2" and events.auto_filter.ref == "A1:J3"
+    assert events["E3"].fill.start_color.rgb.endswith("C6E0B4")  # CLOSED rows are green
+    assert events["A3"].number_format == "dd-mmm-yyyy" and events["B3"].number_format == "h:mm:ss AM/PM"
+    assert events["A3"].fill.fill_type is None  # routine rows: only the event cell is coloured
     # next day rolls into its own workbook
-    assert (tmp_path / "airlock_events_2026-11-17.xlsx").exists()
+    assert (tmp_path / "17NOV2026.xlsx").exists()
+
+
+def test_older_layout_file_is_set_aside_not_mixed(tmp_path):
+    old = tmp_path / "16NOV2026.xlsx"
+    workbook = Workbook()
+    workbook.active.title = "Events"
+    workbook.active.append(["Date", "Time", "Airlock", "Door", "Event"])  # old header
+    workbook.save(old)
+    EventLogger(tmp_path).log_event(
+        airlock="A", door="D", event="OPENED", tag="t", raw_value=False, plc="p",
+        when=datetime(2026, 11, 16, 10, 0, 0),
+    )
+    assert len(list(tmp_path.glob("*.unreadable-*.xlsx"))) == 1
+    assert [c.value for c in load_workbook(old)["Events"][1]] == list(HEADER)
 
 
 def test_unreadable_xlsx_is_set_aside_not_overwritten(tmp_path):
-    bad = tmp_path / "airlock_events_2026-11-16.xlsx"
+    bad = tmp_path / "16NOV2026.xlsx"
     bad.write_bytes(b"not a real workbook")
     log = EventLogger(tmp_path)
     log.log_event(
@@ -106,7 +162,7 @@ def _recorder(tmp_path):
 
 def _events(tmp_path):
     rows = _rows(next(tmp_path.glob("*.csv")))[1:]
-    return [(r[4], r[5], r[6], r[7], r[10]) for r in rows]
+    return [(r[4], r[5], r[9], r[6]) for r in rows]  # event, open for, seconds, tag
 
 
 def test_open_duration_and_timer_done_events(tmp_path):
@@ -121,14 +177,13 @@ def test_open_duration_and_timer_done_events(tmp_path):
     recorder.on_transition(plc, door, False, True, False)
 
     assert _events(tmp_path) == [
-        ("OPENED", "", "", "Local:9:I.Data.0", ""),
-        ("DOOR-AJAR TIMER DONE", "0:00:31", "31.2", "Door_N1051A_Timer.DN",
-         "door left open past the PLC door-ajar timer preset; airlock violation latched"),
-        ("CLOSED", "1:00:03", "3603.0", "Local:9:I.Data.0", ""),
+        (EVENT_OPENED, "", "", "Local:9:I.Data.0"),
+        (EVENT_TIMED_OUT, "31 sec", "31.2", "Door_N1051A_Timer.DN"),
+        (EVENT_CLOSED, "1 hr 0 min 3 sec", "3603.0", "Local:9:I.Data.0"),
     ]
 
 
-def test_duration_notes_for_startup_and_comm_loss(tmp_path):
+def test_startup_states_and_approximate_durations(tmp_path):
     recorder, clock, door = _recorder(tmp_path)
     recorder.on_transition("plc1", door, True, False, True)  # already open at startup
     clock["t"] += 10
@@ -137,10 +192,15 @@ def test_duration_notes_for_startup_and_comm_loss(tmp_path):
     recorder.on_comm_change("plc1", True)
     clock["t"] += 5
     recorder.on_transition("plc1", door, False, True, False)
+    recorder.on_transition("plc1", door, True, False, False)
+    clock["t"] += 7
+    recorder.on_transition("plc1", door, False, True, False)  # clean pass: exact
 
-    notes = [e[4] for e in _events(tmp_path)]
-    assert notes[1] == "door was already open at startup; duration counted from startup"
-    assert notes[4] == "PLC comm was lost while open; duration is approximate"
+    events = [(e[0], e[1]) for e in _events(tmp_path)]
+    assert events[0] == (EVENT_OPENED_AT_STARTUP, "")
+    assert events[1] == (EVENT_CLOSED, "~10 sec")  # was open at startup: approximate
+    assert events[4] == (EVENT_CLOSED, "~5 sec")  # PLC dropped while open: approximate
+    assert events[6] == (EVENT_CLOSED, "7 sec")
 
 
 def test_comm_loss_and_recovery_reported_once_per_plc():

@@ -83,35 +83,38 @@ the hardened unit file used in production on the Raspberry Pi.
 ## Daily door event log (Excel)
 
 Every confirmed door **open** and **close** is appended to a per-day Excel workbook
-(`airlock_events_YYYY-MM-DD.xlsx`, new file at midnight) in the folder set by
-`event_log.directory` -- default `~/Desktop/AirlockLogs`, so the files sit on the Pi
-desktop and open by double-click in Excel/LibreOffice. Set `event_log.format: csv`
-for plain CSV files instead. The workbook has an **Events** sheet (frozen header,
-filter buttons, rows colour-coded by event, real date/time cells) and a **Key** sheet
+named with the GMP date convention -- `16NOV2026.xlsx` (new file at midnight) -- in the
+folder set by `event_log.directory` -- default `~/Desktop/AirlockLogs`, so the files sit
+on the Pi desktop and open by double-click in Excel/LibreOffice. Set
+`event_log.format: csv` for plain CSV files instead, or `event_log.file_prefix` to put
+text before the date. The workbook has an **Events** sheet (frozen header, filter
+buttons, routine rows white with a colour-coded "What Happened" cell, timed-out doors and
+PLC dropouts highlighted across the whole row, real date/time cells) and a **Key** sheet
 explaining every column and event.
 
-**Example:** [docs/examples/airlock_events_EXAMPLE.xlsx](docs/examples/airlock_events_EXAMPLE.xlsx)
-is a made-up sample day showing what a real file looks like (rebuild it with
-`python scripts/make_example_log.py`). Columns:
+**Examples:** [docs/examples/](docs/examples/) holds two weeks of made-up full-day logs
+(`03NOV2026.xlsx` .. `16NOV2026.xlsx`) showing what real files look like (rebuild them
+with `python scripts/make_example_log.py`). Columns:
 
-| Date | Time | Airlock | Door | Event | Open Duration | Open Duration (s) | Tag Polled | Raw Value | PLC | Note |
-|------|------|---------|------|-------|---------------|-------------------|------------|-----------|-----|------|
+| Date | Time | Airlock | Door | What Happened | Open For | Tag Polled | Raw Value | PLC | Open Seconds |
+|------|------|---------|------|---------------|----------|------------|-----------|-----|--------------|
 
-- `Event` is `OPENED` or `CLOSED` (plus `PLC COMM LOST` / `PLC COMM RESTORED`, so a gap
-  in the log is never mistaken for "nothing happened").
-- `DOOR-AJAR TIMER DONE` is logged the moment the PLC's own 30 s door-ajar timer
+- `What Happened` is `OPENED` or `CLOSED`, `LEFT OPEN - TIMED OUT`, `PLC OFFLINE` or
+  `PLC BACK ONLINE` (so a gap in the log is never mistaken for "nothing happened").
+  The state of every door at startup is logged once as `OPENED (at startup)` /
+  `CLOSED (at startup)`.
+- `LEFT OPEN - TIMED OUT` is logged the moment the PLC's own 30 s door-ajar timer
   (`Door_Nxxxx_Timer.DN`, set per door with `ajar_timer_tag`) finishes, i.e. the door was
-  left open too long and the airlock violation latched.
-- `Open Duration` (`H:MM:SS`) and `Open Duration (s)` are filled on `CLOSED` rows (total
-  time the door was open) and on `DOOR-AJAR TIMER DONE` rows (time open so far). The Note
-  says so if the door was already open at startup or the PLC dropped off the network
-  while it was open, because the duration is then only approximate.
+  left open too long and the airlock alarm latched.
+- `Open For` (plain words, e.g. `4 min 43 sec`) and `Open Seconds` are filled on `CLOSED`
+  rows (total time the door was open) and on timed-out rows (time open so far). A leading
+  `~` (e.g. `~1 min 6 sec`) means the time is approximate: the door was already open at
+  startup, or the PLC dropped off the network while it was open.
 - `Tag Polled` is the PLC tag the state was read from (e.g. `Local:7:I.Data.0`, or the
   timer `.DN` bit for timer events) and `Raw Value` is the bit as read (before polarity
   inversion).
 - A misspelled/unreadable timer tag is warned about once and skipped; it never stops door
   logging or raises a PLC comm fault. An unreadable *door* tag still fails the PLC read.
-- The state of every door at startup is logged once with Note `initial state at startup`.
 - Only events are written (no per-poll rows), so SD wear is negligible.
 
 [config.airlocks.example.yaml](config.airlocks.example.yaml) is pre-filled with all 42

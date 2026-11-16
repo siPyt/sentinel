@@ -86,7 +86,10 @@ def _build_event_logger(config: AppConfig) -> EventLogger | None:
         return None
     try:
         event_logger = EventLogger(
-            config.event_log.directory, config.event_log.file_prefix, config.event_log.format
+            config.event_log.directory,
+            config.event_log.file_prefix,
+            config.event_log.format,
+            auto_flush=False,  # run_daemon flushes once per poll cycle, off the event loop
         )
     except OSError as exc:
         logger.error("Event log disabled: cannot use %s (%s)", config.event_log.directory, exc)
@@ -159,14 +162,16 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                         door_state.effective_open,
                         door_state.reliable,
                     )
-            if event_logger is not None:
-                event_logger.flush_pending()
+            if event_logger is not None and event_logger.has_pending:
+                await asyncio.to_thread(event_logger.flush_pending)
 
             elapsed = time.monotonic() - cycle_start
             await _sleep_or_stop(stop_event, max(0.0, poll_interval_s - elapsed))
     finally:
         logger.info("sentinel shutting down")
         await asyncio.gather(*(p.close() for p in pollers.values()), return_exceptions=True)
+        if event_logger is not None:
+            event_logger.flush_pending()  # don't lose events queued in the final cycle
         if bacnet is not None:
             await bacnet.close()
 

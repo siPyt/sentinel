@@ -53,7 +53,10 @@ class EventLogConfig(BaseModel):
             "'~' expands to the home directory of the user running sentinel."
         ),
     )
-    file_prefix: str = Field(default="airlock_events", min_length=1)
+    file_prefix: str = Field(
+        default="",
+        description="Optional text before the date in the file name (empty -> 16NOV2026.xlsx).",
+    )
     format: Literal["xlsx", "csv"] = Field(
         default="xlsx",
         description="'xlsx' = Excel workbook per day (default); 'csv' = plain CSV per day.",

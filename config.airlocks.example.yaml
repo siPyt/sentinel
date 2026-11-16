@@ -23,10 +23,10 @@ service:
 
 event_log:
   enabled: true
-  # One file per day: airlock_events_YYYY-MM-DD.csv (opens directly in Excel).
+  # One Excel file per day, GMP date naming: 16NOV2026.xlsx
   # "~" is the home folder of the user running sentinel (admin on the Pi).
   directory: "~/Desktop/AirlockLogs"
-  file_prefix: "airlock_events"
+  file_prefix: ""
 
 # Only needed for the BACnet daemon (not for --log-only).
 bacnet:
