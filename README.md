@@ -2,7 +2,10 @@
 
 **Cleanroom Door State Bridge** -- a fault-tolerant Python 3.11+ daemon for 64-bit
 Raspberry Pi OS that bridges cleanroom airlock door position tags from Allen-Bradley
-RSLogix 5000 v17 PLCs to a Siemens Apogee / Insight BMS.
+RSLogix 5000 v17 PLCs to a Siemens Apogee / Insight BMS. It also keeps a tamper-evident
+daily door log in Excel, flags interlock violations and failing switches, shows a live
+cockpit on the Pi's screen, and learns each door's normal in the background.
+**[One-page-per-topic brochure (PDF)](docs/Sentinel-Brochure.pdf)**.
 
 ```
 Allen-Bradley RSLogix 5000 v17 PLC --(EtherNet/IP CIP)--> Raspberry Pi 5 --(BACnet/IP)--> Siemens Apogee / Insight BMS
