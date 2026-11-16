@@ -86,6 +86,22 @@ class EventLogConfig(BaseModel):
     )
 
 
+class LearningConfig(BaseModel):
+    """``learning:`` section -- the nightly background learning job (advisory only)."""
+
+    enabled: bool = True
+    directory: str | None = Field(
+        default=None,
+        description="Learning state folder. Default: an 'ml' folder next to the ledger folder.",
+    )
+    report_directory: str | None = Field(
+        default=None,
+        description="Where weekly Excel reports go. Default: 'ML-Reports' inside event_log.directory.",
+    )
+    target_days: int = Field(default=180, ge=30, description="Length of the study (about six months).")
+    report_every_days: int = Field(default=7, ge=1)
+
+
 class AlertsConfig(BaseModel):
     """``alerts:`` section -- conditions that are logged and flashed on the cockpit."""
 
@@ -252,6 +268,7 @@ class AppConfig(BaseModel):
     event_log: EventLogConfig = Field(default_factory=EventLogConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    learning: LearningConfig = Field(default_factory=LearningConfig)
     # Optional so the event-log-only mode (--log-only) needs no BMS settings;
     # main.py requires it for the normal BACnet daemon.
     bacnet: BACnetConfig | None = None

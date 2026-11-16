@@ -51,6 +51,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--learn-now",
+        action="store_true",
+        help=(
+            "Run the background learning job once (the nightly timer does this automatically): "
+            "per-door baselines, drift, trends and anomalies from the ledger. Advisory only; "
+            "needs the 'learn' extras (numpy, scikit-learn)."
+        ),
+    )
+    parser.add_argument(
+        "--force-report",
+        action="store_true",
+        help="With --learn-now: write the Excel learning report even if one was written recently.",
+    )
+    parser.add_argument(
         "--verify-logs",
         action="store_true",
         help=(
@@ -360,6 +374,27 @@ def run_verify_logs(config: AppConfig) -> int:
     return 0 if report.ok else 2
 
 
+def run_learn_now(config: AppConfig, force_report: bool) -> int:
+    if not config.learning.enabled:
+        print("Learning is switched off (learning.enabled: false).")
+        return 0
+    try:
+        from sentinel.learn.run import run_learning
+    except ImportError as exc:
+        print(f"error: the learning job needs numpy and scikit-learn ({exc}).\n"
+              "Install them with: pip install 'sentinel[learn]'", file=sys.stderr)
+        return 3
+    summary = run_learning(config, force_report=force_report)
+    progress = summary["progress"]
+    print(f"Learning: {progress['days']} of {progress['target_days']} days ({progress['percent']}%) - {progress['phase']}")
+    print(f"Findings: {len(summary['findings'])}   State: {summary['state_dir']}")
+    for finding in summary["findings"][:10]:
+        print(f"  [{finding['severity']}] {finding['door']}: {finding['title']} - {finding['evidence']}")
+    for report in summary["reports"]:
+        print(f"Report written: {report}")
+    return 0
+
+
 def cli_main() -> None:
     args = build_arg_parser().parse_args()
 
@@ -374,6 +409,9 @@ def cli_main() -> None:
 
     if args.verify_logs:
         raise SystemExit(run_verify_logs(config))
+    if args.learn_now:
+        configure_logging(config.service.log_level)
+        raise SystemExit(run_learn_now(config, args.force_report))
 
     configure_logging(config.service.log_level)
 

@@ -47,6 +47,7 @@ from sentinel.event_log import (
 )
 from sentinel.health import HealthTracker
 from sentinel.integrity import clock_status, config_fingerprint
+from sentinel.learn.state import load_state, ml_directory
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,9 @@ class StatusBoard:
         self._fingerprint = config_fingerprint(config)
         self._alerts: dict = {"interlock": [], "chatter": []}
         self._health = HealthTracker()
+        self._learning_dir = ml_directory(config) if (config.learning.enabled and not demo) else None
+        self._learning_cache: tuple[dict | None, float] = (None, 0.0)
+        self._learning_override: dict | None = None  # demo data
         self._clock = ("unknown", 0.0)  # (status, when it was checked)
         self._plcs: dict[str, dict] = {}
         self._doors: dict[tuple[str, str], dict] = {}
@@ -186,6 +190,21 @@ class StatusBoard:
 
     # -- read side -------------------------------------------------------------
 
+    def set_learning_demo(self, state: dict) -> None:
+        self._learning_override = state
+
+    def _learning(self) -> dict | None:
+        """The nightly learning job's progress and findings (re-read from disk once a minute)."""
+        if self._learning_override is not None:
+            return self._learning_override
+        if self._learning_dir is None:
+            return None
+        state, checked = self._learning_cache
+        if time.time() - checked > 60:
+            state = load_state(self._learning_dir)
+            self._learning_cache = (state, time.time())
+        return state
+
     def _clock_status(self) -> str:
         status, checked = self._clock
         if time.time() - checked > 300:  # a subprocess call: refresh every 5 minutes at most
@@ -197,6 +216,10 @@ class StatusBoard:
         now = time.time()
         local = datetime.now().astimezone()
         clock = self._clock_status()
+        learning = self._learning()
+        ml_by_door: dict[str, list[str]] = {}
+        for finding in (learning or {}).get("findings", []):
+            ml_by_door.setdefault(finding["door"], []).append(f"{finding['severity']}: {finding['title']}")
         with self._lock:
             counts = self._counts
             return {
@@ -210,7 +233,11 @@ class StatusBoard:
                 "config_fingerprint": self._fingerprint,
                 "poll_interval_ms": self._config.service.poll_interval_ms,
                 "plcs": [dict(p) for p in self._plcs.values()],
-                "doors": [dict(d, health=self._health.score(d["name"], now)) for d in self._doors.values()],
+                "doors": [
+                    dict(d, health=self._health.score(d["name"], now), ml=ml_by_door.get(d["name"], []))
+                    for d in self._doors.values()
+                ],
+                "learning": learning,
                 "alerts": self._alerts,
                 "events": list(self._events)[:100],
                 "counts": {
@@ -440,6 +467,38 @@ def _seed_demo_history(board: StatusBoard) -> None:
         board.on_event(_demo_row(None, event, detail=detail, ago_s=ago))
 
 
+def _demo_learning(doors: list) -> dict:
+    """Made-up learning-job output (about 7 weeks in) so the Learning card can be shown."""
+    def at(index: int) -> str:
+        return doors[min(index, len(doors) - 1)].cfg.object_name
+
+    today = date.today().isoformat()
+    findings = [
+        {"severity": "alert", "door": at(41), "airlock": "N1068", "kind": "anomalous_day", "date": today,
+         "title": "Unusual day on " + datetime.now().strftime("%d-%b"),
+         "evidence": "share of openings timed out: 0.4 (usually 0.0); longest-typical open time (s): 75 (usually 12)",
+         "suggest": "Look at that day on the Events sheet and check the door and its switch."},
+        {"severity": "watch", "door": at(11), "airlock": "N1065", "kind": "drift_open_time", "date": today,
+         "title": "Open times have drifted longer",
+         "evidence": "Typical open time moved from 8 s to 13 s (+62%).", "suggest": "Check the door closer, hinges and latch."},
+        {"severity": "watch", "door": at(5), "airlock": "N1055", "kind": "trend_open_time", "date": today,
+         "title": "Open times are trending up",
+         "evidence": "Steady change of about +24% per month over the last 49 days (from about 9 s).",
+         "suggest": "Plan an inspection of the closer and hinges."},
+        {"severity": "info", "door": at(20), "airlock": "N1044", "kind": "slower_than_peers", "date": today,
+         "title": "Slower than its sister doors",
+         "evidence": "Typical open time 17 s versus 8 s for the other doors in N1044.", "suggest": "Compare it with its sister doors."},
+    ]
+    return {
+        "progress": {
+            "days": 47, "target_days": 180, "percent": 26, "stage": "anomaly", "doors": len(doors),
+            "phase": "Anomaly detection and drift watch active. Trends start at day 60.",
+            "last_run": datetime.now().replace(hour=2, minute=30, second=0, microsecond=0).isoformat(timespec="seconds"),
+        },
+        "findings": findings,
+    }
+
+
 def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) -> None:
     """Drive the board with simulated door traffic. Never logs to disk or touches a PLC.
 
@@ -452,6 +511,7 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
     monitor = AlertMonitor(config, sink=_DemoSink(board))
     doors = [_DemoDoor(d) for d in config.plcs[0].doors]
     _seed_demo_health(board, doors, rng)
+    board.set_learning_demo(_demo_learning(doors))
     _seed_demo_history(board)
     by_group: dict[str, list[_DemoDoor]] = {}
     for door in doors:

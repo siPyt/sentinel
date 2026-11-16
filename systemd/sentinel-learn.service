@@ -1,0 +1,47 @@
+# sentinel-learn.service -- the nightly background learning job (advisory only).
+#
+# Started by sentinel-learn.timer. Runs once, at low priority, and exits. It reads the
+# tamper-evident ledger and writes only its own state (/var/lib/sentinel/ml) and the weekly
+# reports (AirlockLogs/ML-Reports). It never touches the day files, the ledger or the PLC,
+# and the polling service does not wait for it.
+#
+# Install (needs numpy/scipy/scikit-learn in the venv):
+#   sudo /opt/sentinel/.venv/bin/pip install numpy scipy scikit-learn
+#   sudo cp systemd/sentinel-learn.service systemd/sentinel-learn.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sentinel-learn.timer
+# Run it by hand:  sudo systemctl start sentinel-learn.service   (output: journalctl -u sentinel-learn)
+
+[Unit]
+Description=sentinel - nightly background learning (advisory)
+Documentation=file:///opt/sentinel/README.md
+After=sentinel.service
+
+[Service]
+Type=oneshot
+User=sentinel
+Group=sentinel
+WorkingDirectory=/opt/sentinel
+ExecStart=/opt/sentinel/.venv/bin/python -m sentinel --config /opt/sentinel/config.yaml --learn-now
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=10
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+
+# --- Security hardening (MemoryDenyWriteExecute is left off: numpy/scipy need writable+executable memory) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=-/home/admin/Desktop/AirlockLogs
+StateDirectory=sentinel
+StateDirectoryMode=0755
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true

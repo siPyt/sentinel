@@ -21,6 +21,12 @@ dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
 ]
+# Background learning job (nightly; never imported by the polling service).
+learn = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+]
 
 [project.scripts]
 sentinel = "sentinel.main:cli_main"

@@ -45,6 +45,13 @@ h2{margin:0 0 8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;c
 .hrt.none use{fill:none;stroke:currentColor;stroke-width:1.8}
 .hrt:not(.none) use{fill:currentColor}
 .legend{font-size:12px;color:var(--dim);margin:-2px 0 10px}
+.adv{margin-left:8px;padding:1px 7px;border-radius:999px;border:1px solid #5b4a8f;color:#c9a8ff;font-size:10px;letter-spacing:.08em}
+.bar{height:9px;border-radius:5px;background:#1f2a37;overflow:hidden;margin:2px 0 6px}
+.bar div{height:100%;background:linear-gradient(90deg,#6f4cd6,#a371f7)}
+.find{border-left:4px solid var(--grey);padding:3px 0 3px 9px;margin:7px 0;font-size:13px}
+.find.alert{border-left-color:var(--red)}.find.watch{border-left-color:var(--amber)}.find.info{border-left-color:var(--blue)}
+.find .sub{margin-top:1px}
+.tile .m.ml{color:#c9a8ff;font-weight:700}
 .tile .s{font-weight:800;font-size:12px;letter-spacing:.04em}
 .tile .m{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}
 .tile.CLOSED{border-color:#1f6f31}.tile.CLOSED .s{color:var(--green)}
@@ -106,6 +113,7 @@ hr{border:0;border-top:1px solid var(--line);margin:10px 0}
   </section>
   <aside>
     <div class="card"><h2>Recent events</h2><div id="events"></div></div>
+    <div class="card"><h2>Learning <span class="adv">advisory</span></h2><div id="learning"></div></div>
     <div class="card"><h2>System health</h2><div id="health"></div>
       <div class="sub">Read-only view. It cannot change anything in the PLC or in sentinel.</div></div>
   </aside>
@@ -218,10 +226,12 @@ function render(d){
       const c = tileClass(x), inInter = interDoors.has(x.name), ch = chatDoors.get(x.name);
       const label = c==="TIMEDOUT" ? "TIMED OUT" : x.state;
       const meta = (c==="OPEN" || c==="TIMEDOUT" ? '<div class="m">'+dur(d.now-x.since)+'</div>' : "")+
-        (inInter ? '<div class="m bad">INTERLOCK</div>' : "")+(ch ? '<div class="m warn">CHATTER</div>' : "");
+        (inInter ? '<div class="m bad">INTERLOCK</div>' : "")+(ch ? '<div class="m warn">CHATTER</div>' : "")+
+        (x.ml && x.ml.length ? '<div class="m ml">ML FLAG</div>' : "");
       const lvl = healthLevel(x.health);
       const tip = x.tag+" | bit "+(x.raw==null ? "-" : x.raw)+(x.since && x.state!=="UNKNOWN" ? " | "+x.state+" for "+dur(d.now-x.since) : "")+
-        (x.health ? "\nHealth: "+HEALTH_WORD[lvl]+(x.health.score==null ? "" : " ("+x.health.score+"/100)")+" - "+x.health.reasons.join("; ") : "");
+        (x.health ? "\nHealth: "+HEALTH_WORD[lvl]+(x.health.score==null ? "" : " ("+x.health.score+"/100)")+" - "+x.health.reasons.join("; ") : "")+
+        (x.ml && x.ml.length ? "\nLearning: "+x.ml.join("; ") : "");
       const hs = heart(lvl);
       return '<div class="tile '+c+(inInter ? " ALARM" : "")+'" title="'+esc(tip)+'"><div class="n"><span>'+esc(x.name.replace(/^doors?_/i,""))+'</span>'+hs+'</div>'+
              '<div class="s">'+label+'</div>'+meta+'</div>';
@@ -236,6 +246,25 @@ function render(d){
     (e.open_for ? '<div class="sub" style="margin:2px 0 0">'+(e.event==="INTERLOCK CLEARED" ? "lasted " : "open ")+esc(e.open_for)+'</div>' : "")+
     (e.detail ? '<div class="sub" style="margin:2px 0 0">'+esc(e.detail)+'</div>' : "")+'</td></tr>').join("") + "</table>"
     : '<div class="sub">No events yet since sentinel started.</div>';
+
+  // learning: progress toward the six-month study, plus what it has found so far
+  const L = d.learning;
+  if (!L) {
+    $("learning").innerHTML = '<div class="sub" style="margin-top:0">The learning job has not run yet. It runs by itself every night and reads only the tamper-evident ledger.</div>';
+  } else {
+    const p = L.progress, fs = L.findings || [];
+    const when = p.last_run ? new Date(p.last_run).toLocaleString() : "";
+    $("learning").innerHTML =
+      '<div class="bar"><div style="width:'+p.percent+'%"></div></div>'+
+      '<div style="font-size:13px"><b>Day '+p.days+' of '+p.target_days+'</b> ('+p.percent+'%)</div>'+
+      '<div class="sub" style="margin-top:2px">'+esc(p.phase)+'</div>'+
+      (fs.length ? fs.slice(0, 5).map(f =>
+        '<div class="find '+esc(f.severity)+'"><b>'+esc(f.door.replace(/^doors?_/i,""))+'</b> '+esc(f.title)+
+        '<div class="sub">'+esc(f.evidence)+'</div></div>').join("") +
+        (fs.length > 5 ? '<div class="sub">+ '+(fs.length-5)+' more in the weekly report</div>' : "")
+       : '<div class="sub">'+(p.days < 14 ? "Nothing to report yet: still collecting data." : "No findings: everything looks normal for each door.")+'</div>')+
+      '<div class="sub">Last run '+esc(when)+'. Weekly Excel report: AirlockLogs / ML-Reports.</div>';
+  }
 
   // health: the essentials up front, the rest folded away
   const row = (k, v, c) => '<div class="k">'+k+'</div><div class="v '+(c||"")+'">'+v+'</div>';

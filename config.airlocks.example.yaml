@@ -33,6 +33,14 @@ event_log:
   ledger_directory: "/var/lib/sentinel/ledger"
   read_only_past_days: true
 
+# Nightly background learning (advisory): baselines, drift, trends and anomalies per door,
+# a weekly Excel report in <directory>/ML-Reports, and a "Learning" card on the cockpit.
+# Needs numpy, scipy, scikit-learn; see systemd/sentinel-learn.service.
+learning:
+  enabled: true
+  target_days: 180            # length of the study (about six months)
+  report_every_days: 7
+
 # Conditions that are logged (and flash on the cockpit).
 alerts:
   interlock_violation: true   # two doors of one airlock open together (per door: interlock_group)

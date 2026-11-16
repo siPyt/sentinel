@@ -79,6 +79,10 @@ NOTES
 - INTEGRITY LEDGER: /var/lib/sentinel/ledger/ledger.jsonl (written only by the sentinel user,
   world-readable). Verify the day files against it with:
   sudo -u sentinel /opt/sentinel/.venv/bin/python -m sentinel --config /opt/sentinel/config.yaml --verify-logs
+- LEARNING: nightly background job (sentinel-learn.timer, 02:30; state in /var/lib/sentinel/ml,
+  weekly Excel reports in /home/admin/Desktop/AirlockLogs/ML-Reports). Advisory only; reads the
+  ledger, never changes logs or alarms. Run now: sudo systemctl start sentinel-learn.service
+  (output: journalctl -u sentinel-learn). Needs numpy/scipy/scikit-learn in /opt/sentinel/.venv.
 - INTERNET GATE (Pi desktop / VNC): browsing from the Pi requires a username and password.
   Chromium and Firefox are forced through a local authenticating proxy (tinyproxy on
   127.0.0.1:8888, config /etc/tinyproxy/tinyproxy.conf, root-only), and an nftables rule

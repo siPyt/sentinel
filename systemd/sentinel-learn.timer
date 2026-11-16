@@ -1,0 +1,12 @@
+# sentinel-learn.timer -- runs the learning job every night at 02:30 (a missed run, e.g. the Pi
+# was off, is made up at the next boot).
+[Unit]
+Description=Run sentinel learning every night
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

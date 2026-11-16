@@ -184,6 +184,34 @@ with a staged scene (interlock violation, chattering switch, door left open, bro
 for screenshots. On the Pi, use the **Sentinel Demo** desktop icon
 ([scripts/sentinel-demo.sh](scripts/sentinel-demo.sh)).
 
+## Background learning
+
+A separate nightly job (`sentinel-learn.timer`, 02:30, low priority; run by hand with
+`--learn-now`) learns what is normal for each door from the **ledger** and reports when something
+stops being normal. It never runs inside the polling service, never writes to the day files or the
+ledger, and never changes an alarm: **advisory only**. It needs `numpy`, `scipy` and `scikit-learn`
+(`pip install 'sentinel[learn]'`); install it with the units in [systemd/](systemd/).
+
+What it learns, and when it switches on (days of well-monitored data; days the Pi was stopped,
+crashed or the PLC was offline are not learned from):
+
+| From day | What |
+|----------|------|
+| 14 | Per-door baselines: openings per weekday/weekend, typical and long open times, timed-out share. |
+| 30 | **Anomaly detection** (Isolation Forest on each door's own robust z-scores: openings, open times, timeouts, chatter, interlock, night use) and an **EWMA drift watch** on open time. |
+| 60 | **Trends** (Theil-Sen slope with a Kendall test) on open time and timeout share, **sister-door** comparison, and **unusual site traffic** by weekday and hour. |
+| 180 | The **six-month study**: a one-off `ML-Study-<date>.xlsx` ranking every door, then ongoing monitoring. |
+
+Findings are `alert` / `watch` / `info`, each with the numbers behind it (what was seen, what is
+usual) and a suggested check. They appear on the cockpit's **Learning** card (progress toward day 180
+plus the latest findings, with an *ML FLAG* marker on the door) and in a weekly Excel report,
+`ML-Reports/ML-Report-<date>.xlsx` (Summary, Findings, Door baselines, How to read), kept apart from
+the GMP day files. State and the model details (`model_info.json`: library versions, training size,
+ledger head code) are in `/var/lib/sentinel/ml/`; `history.csv` keeps one row per door per night so
+the learning itself can be reviewed. Findings are held back until there is enough data, so a new
+installation does not raise false alarms. Failure records would unlock remaining-life models; those
+are not built yet.
+
 ## Project layout
 
 ```
@@ -196,6 +224,7 @@ src/sentinel/
   verify.py          --verify-logs (day files vs ledger)
   alerts.py          Interlock-violation and chatter detection
   health.py          Per-door health heart (rule-based, advisory)
+  learn/             Nightly learning job: features, analysis (scikit-learn), report, run
   dashboard.py       Read-only live cockpit HTTP server + demo feed
   dashboard_page.py  Cockpit HTML/JS page
   bacnet_server.py   Northbound bacpypes3 BACnet/IP server
