@@ -23,33 +23,33 @@ position:sticky;top:0;background:var(--bg);z-index:5;flex-wrap:wrap}
 #banner{display:none;padding:10px 18px;font-weight:700;text-align:center}
 #banner.stale{display:block;background:#5b1a17;color:#ffd7d4}
 #banner.demo{display:block;background:#3b2f6b;color:#e4dcff}
-main{display:grid;grid-template-columns:minmax(0,1fr) 410px;gap:16px;padding:16px 18px}
-@media(max-width:1100px){main{grid-template-columns:1fr}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:16px}
-h2{margin:0 0 10px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
-.summary{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin-bottom:12px}
-.stat{padding:8px 14px;border-radius:8px;background:#0d131a;border:1px solid var(--line);min-width:96px}
-.stat b{font-size:24px;display:block;line-height:1.1;font-variant-numeric:tabular-nums}
-.stat span{font-size:12px;color:var(--dim)}
-.stat.green b{color:var(--green)}.stat.amber b{color:var(--amber)}.stat.red b{color:var(--red)}.stat.grey b{color:var(--grey)}
-label.toggle{margin-left:auto;align-self:center;color:var(--dim);font-size:13px;cursor:pointer;user-select:none}
-.attention{border-left:4px solid var(--green)}
-.attention.warn{border-left-color:var(--amber)}.attention.bad{border-left-color:var(--red)}
-.attention ul{margin:0;padding-left:18px}.attention li{margin:3px 0}
-.airlock{margin-bottom:14px}
-.airlock h3{margin:0 0 6px;font-size:13px;color:var(--dim);font-weight:600}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:8px}
-.tile{border-radius:8px;padding:8px 11px;border:2px solid var(--line);background:#0d131a}
-.tile .n{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tile .s{font-weight:800;font-size:18px;letter-spacing:.03em}
-.tile .m{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;padding:14px 18px}
+@media(max-width:1000px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+h2{margin:0 0 8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.status{border-left:6px solid var(--green);font-size:18px}
+.status.warn{border-left-color:var(--amber)}.status.bad{border-left-color:var(--red)}
+.status ul{margin:0;padding-left:20px}.status li{margin:3px 0}
+.status .ok{color:var(--green);font-weight:700}
+.counts{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 10px;font-size:14px;color:var(--dim)}
+.counts b{font-size:18px;font-variant-numeric:tabular-nums}
+.counts .g b{color:var(--green)}.counts .a b{color:var(--amber)}.counts .r b{color:var(--red)}.counts .u b{color:var(--grey)}
+#doors{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+.airlock{border:1px solid var(--line);border-radius:8px;padding:5px 7px 7px;background:#0d131a}
+.airlock h3{margin:0 0 5px;font-size:11px;color:var(--dim);font-weight:600;letter-spacing:.04em}
+.tiles{display:flex;flex-wrap:wrap;gap:5px}
+.tile{width:92px;border-radius:6px;padding:4px 7px;border:2px solid var(--line);background:#0d131a;text-align:center}
+.tile .n{font-weight:700;font-size:14px;white-space:nowrap}
+.tile .s{font-weight:800;font-size:12px;letter-spacing:.04em}
+.tile .m{font-size:12px;color:var(--text);font-variant-numeric:tabular-nums}
 .tile.CLOSED{border-color:#1f6f31}.tile.CLOSED .s{color:var(--green)}
 .tile.OPEN{border-color:var(--amber);background:#2a2208}.tile.OPEN .s{color:var(--amber)}
 .tile.TIMEDOUT{border-color:var(--red);background:#3a1210;animation:pulse 1.3s infinite}.tile.TIMEDOUT .s{color:var(--red)}
 .tile.UNKNOWN{border-color:#3b434c}.tile.UNKNOWN .s,.tile.UNKNOWN .n{color:var(--grey)}
 @keyframes pulse{50%{box-shadow:0 0 0 3px rgba(248,81,73,.35)}}
+details{margin-top:8px}summary{cursor:pointer;color:var(--dim);font-size:13px;user-select:none}
 table{width:100%;border-collapse:collapse;font-size:13px}
-td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+td{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 td.t{color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .chip{display:inline-block;padding:1px 8px;border-radius:5px;font-weight:700;font-size:12px;white-space:nowrap}
 .c-OPENED{background:#4d3d0a;color:#ffd866}.c-CLOSED{background:#17391f;color:#7ee08f}
@@ -59,7 +59,7 @@ td.t{color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
 .kv .k{color:var(--dim)}.kv .v{text-align:right;font-variant-numeric:tabular-nums;word-break:break-word}
 .v.ok{color:var(--green)}.v.warn{color:var(--amber)}.v.bad{color:var(--red)}
 .sub{font-size:12px;color:var(--dim);margin-top:6px}
-#events{max-height:420px;overflow:auto}
+#events{max-height:340px;overflow:auto}
 hr{border:0;border-top:1px solid var(--line);margin:10px 0}
 </style>
 </head>
@@ -73,16 +73,16 @@ hr{border:0;border-top:1px solid var(--line);margin:10px 0}
 <div id="banner"></div>
 <main>
   <section>
-    <div id="attention" class="card attention"><h2>Needs attention</h2><div id="attBody">Connecting to sentinel...</div></div>
+    <div id="attention" class="card status"><div id="attBody">Connecting to sentinel...</div></div>
     <div class="card">
-      <div class="summary" id="summary"></div>
+      <div class="counts" id="summary"></div>
       <div id="doors"></div>
     </div>
   </section>
   <aside>
     <div class="card"><h2>Recent events</h2><div id="events"></div></div>
     <div class="card"><h2>System health</h2><div id="health"></div>
-      <div class="sub">Read-only view. This page cannot change anything in the PLC or in sentinel.</div></div>
+      <div class="sub">Read-only view. It cannot change anything in the PLC or in sentinel.</div></div>
   </aside>
 </main>
 <noscript><div style="padding:20px">This page needs JavaScript.</div></noscript>
@@ -100,7 +100,7 @@ const ago = (t, now) => t == null ? "never" : dur(now - t) + " ago";
 const chipClass = e => e.indexOf("TIMED")>=0 ? "c-TIMED" : e.indexOf("OPENED")===0 ? "c-OPENED"
   : e==="CLOSED" ? "c-CLOSED" : e==="PLC OFFLINE" ? "c-OFFLINE" : e==="PLC BACK ONLINE" ? "c-ONLINE" : "c-STARTED";
 const plcClass = s => s==="ONLINE" ? "ok" : s==="OFFLINE" ? "bad" : "warn";
-let lastOk = 0, problemsOnly = false, demo = false;
+let lastOk = 0, moreOpen = false, demo = false;
 
 function tileClass(d){ return d.state==="OPEN" && d.timer_done ? "TIMEDOUT" : d.state; }
 
@@ -122,81 +122,75 @@ function render(d){
   else { dp.className = "pill ok"; dp.textContent = "All doors closed"; }
 
   $("summary").innerHTML =
-    '<div class="stat green"><b>'+n.CLOSED+'</b><span>closed</span></div>'+
-    '<div class="stat amber"><b>'+n.OPEN+'</b><span>open</span></div>'+
-    '<div class="stat red"><b>'+n.TIMEDOUT+'</b><span>left open - timed out</span></div>'+
-    '<div class="stat grey"><b>'+n.UNKNOWN+'</b><span>unknown</span></div>'+
-    '<label class="toggle"><input type="checkbox" id="po"'+(problemsOnly?" checked":"")+'> show problems only</label>';
-  $("po").onchange = e => { problemsOnly = e.target.checked; render(d); };
+    '<span class="g"><b>'+n.CLOSED+'</b> closed</span><span class="a"><b>'+n.OPEN+'</b> open</span>'+
+    '<span class="r"><b>'+n.TIMEDOUT+'</b> timed out</span><span class="u"><b>'+n.UNKNOWN+'</b> unknown</span>';
 
-  // attention box
+  // status box: one clear answer first, details only when something is wrong
   const att = [], bad = d.plcs.filter(p => p.status !== "ONLINE");
   bad.forEach(p => att.push("PLC <b>"+esc(p.name)+"</b> is "+esc(p.status)+
     (p.status==="OFFLINE" ? " - door states are unknown until it reconnects." : ".")));
   doors.filter(x => tileClass(x)==="TIMEDOUT").forEach(x => att.push(
-    '<b style="color:var(--red)">'+esc(x.name)+'</b> ('+esc(x.airlock)+') has been open '+dur(d.now-x.since)+
+    '<b style="color:var(--red)">'+esc(x.name)+'</b> ('+esc(x.airlock)+') left open '+dur(d.now-x.since)+
     ' - past the door-ajar timer.'));
   doors.filter(x => tileClass(x)==="OPEN").forEach(x => att.push(
     '<b style="color:var(--amber)">'+esc(x.name)+'</b> ('+esc(x.airlock)+') is open ('+dur(d.now-x.since)+').'));
   d.plcs.forEach(p => p.bad_tags.length && att.push("Unreadable timer tag(s) on "+esc(p.name)+": "+p.bad_tags.map(esc).join(", ")));
   const box = $("attention");
-  box.className = "card attention" + (bad.some(p=>p.status==="OFFLINE") || n.TIMEDOUT ? " bad" : att.length ? " warn" : "");
+  box.className = "card status" + (bad.some(p=>p.status==="OFFLINE") || n.TIMEDOUT ? " bad" : att.length ? " warn" : "");
   $("attBody").innerHTML = att.length ? "<ul><li>"+att.join("</li><li>")+"</li></ul>"
-    : '<span style="color:var(--green)">Nothing needs attention.</span>';
+    : '<span class="ok">All '+doors.length+' doors closed - nothing needs attention.</span>';
 
   // door tiles grouped by airlock
   const groups = new Map();
   doors.forEach(x => { if(!groups.has(x.airlock)) groups.set(x.airlock, []); groups.get(x.airlock).push(x); });
   let html = "";
   groups.forEach((list, airlock) => {
-    const shown = problemsOnly ? list.filter(x => tileClass(x) !== "CLOSED") : list;
-    if (!shown.length) return;
-    html += '<div class="airlock"><h3>'+esc(airlock)+'</h3><div class="tiles">' + shown.map(x => {
+    html += '<div class="airlock"><h3>'+esc(airlock)+'</h3><div class="tiles">' + list.map(x => {
       const c = tileClass(x);
-      const label = c==="TIMEDOUT" ? "OPEN - TIMED OUT" : x.state;
-      const meta = x.state==="UNKNOWN" ? "no data" :
-        ((x.since ? "for "+dur(d.now-x.since)+" &middot; " : "")+"bit "+(x.raw==null?"-":x.raw));
-      return '<div class="tile '+c+'" title="'+esc(x.tag)+'"><div class="n">'+esc(x.name)+'</div>'+
-             '<div class="s">'+label+'</div><div class="m">'+meta+'</div></div>';
+      const label = c==="TIMEDOUT" ? "TIMED OUT" : x.state;
+      const meta = c==="OPEN" || c==="TIMEDOUT" ? dur(d.now-x.since) : "";
+      const tip = x.tag+" | bit "+(x.raw==null ? "-" : x.raw)+(x.since && x.state!=="UNKNOWN" ? " | "+x.state+" for "+dur(d.now-x.since) : "");
+      return '<div class="tile '+c+'" title="'+esc(tip)+'"><div class="n">'+esc(x.name.replace(/^doors?_/i,""))+'</div>'+
+             '<div class="s">'+label+'</div>'+(meta ? '<div class="m">'+meta+'</div>' : "")+'</div>';
     }).join("") + "</div></div>";
   });
-  $("doors").innerHTML = html || '<div class="sub">No problems - every door is closed.</div>';
+  $("doors").innerHTML = html;
 
-  // events
-  $("events").innerHTML = d.events.length ? "<table>" + d.events.map(e =>
-    '<tr><td class="t">'+esc(e.time)+'</td><td>'+(e.door ? esc(e.door)+'<div class="sub" style="margin:0">'+esc(e.airlock)+'</div>' : "")+
+  // events: newest first, only the latest dozen (full history is in the daily Excel file)
+  $("events").innerHTML = d.events.length ? "<table>" + d.events.slice(0, 12).map(e =>
+    '<tr><td class="t">'+esc(e.time)+'</td><td>'+(e.door ? esc(e.door.replace(/^doors?_/i,"")) : "")+
     '</td><td><span class="chip '+chipClass(e.event)+'">'+esc(e.event)+'</span>'+
     (e.open_for ? '<div class="sub" style="margin:2px 0 0">open '+esc(e.open_for)+'</div>' : "")+'</td></tr>').join("") + "</table>"
     : '<div class="sub">No events yet since sentinel started.</div>';
 
-  // health
+  // health: the essentials up front, the rest folded away
   const row = (k, v, c) => '<div class="k">'+k+'</div><div class="v '+(c||"")+'">'+v+'</div>';
   let h = "";
   d.plcs.forEach(p => {
     h += '<div class="kv">'+row("PLC", esc(p.name)+" ("+esc(p.ip)+")")+
       row("Link", esc(p.status), plcClass(p.status))+
       row("Last good read", ago(p.last_ok, d.now), p.last_ok==null ? "warn" : "")+
-      row("Read time", p.latency_ms==null ? "-" : p.latency_ms+" ms")+
-      row("Failed reads in a row", p.failures, p.failures ? "warn" : "")+
+      (p.failures ? row("Failed reads in a row", p.failures, "warn") : "")+
       (p.error ? row("Last error", esc(p.error), "bad") : "")+"</div>";
   });
-  h += "<hr>";
-  h += '<div class="kv">'+row("Sentinel version", esc(d.version))+row("Config fingerprint", esc(d.config_fingerprint))+
-    row("Running for", dur(d.now - d.started))+row("Polling every", d.poll_interval_ms+" ms")+"</div><hr>";
   if (d.log) {
     const L = d.log;
-    h += '<div class="kv">'+row("Today's log file", esc(L.file))+
-      row("File size", L.size_kb==null ? "not created yet" : L.size_kb+" KB")+
-      row("Events since start", L.events_this_session)+
+    h += '<div class="kv">'+row("Today's log", esc(L.file))+
       row("Waiting to be saved", L.pending ? "yes" : "no", L.pending ? "warn" : "")+
       row("Disk free", L.disk_free_gb==null ? "-" : L.disk_free_gb+" of "+L.disk_total_gb+" GB")+"</div>";
   } else {
     h += '<div class="kv">'+row("Event log", demo ? "not written in demo" : "OFF", demo ? "" : "bad")+"</div>";
   }
-  h += '<div class="kv">'+row("Opened since start", d.counts.opened)+row("Closed since start", d.counts.closed)+
+  h += '<details id="more"'+(moreOpen ? " open" : "")+'><summary>More details</summary><div class="kv" style="margin-top:8px">'+
+    (d.log ? row("Log file size", d.log.size_kb==null ? "not created yet" : d.log.size_kb+" KB")+row("Events since start", d.log.events_this_session) : "")+
+    row("Opened since start", d.counts.opened)+row("Closed since start", d.counts.closed)+
     row("Timed out since start", d.counts.timed_out, d.counts.timed_out ? "warn" : "")+
-    row("PLC drop-outs since start", d.counts.plc_offline, d.counts.plc_offline ? "warn" : "")+"</div>";
+    row("PLC drop-outs since start", d.counts.plc_offline, d.counts.plc_offline ? "warn" : "")+
+    row("Read time", d.plcs.map(p => p.latency_ms==null ? "-" : p.latency_ms+" ms").join(", "))+
+    row("Polling every", d.poll_interval_ms+" ms")+row("Running for", dur(d.now - d.started))+
+    row("Sentinel version", esc(d.version))+row("Config fingerprint", esc(d.config_fingerprint))+"</div></details>";
   $("health").innerHTML = h;
+  $("more").ontoggle = e => { moreOpen = e.target.open; };
 }
 
 function banner(){
