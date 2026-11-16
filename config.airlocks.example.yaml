@@ -38,7 +38,7 @@ bacnet:
 plcs:
   - id: plc1
     name: "SIGMA_ALDRICH"
-    ip_address: "192.168.1.10" # PLACEHOLDER -- set the real controller IP
+    ip_address: "192.168.1.30"
     slot: 0
     timeout_sec: 2.0
     comm_ok_bacnet_instance: 900
