@@ -5,3 +5,7 @@ bacpypes3==0.0.110
 pydantic==2.14.3
 PyYAML==6.0.3
 openpyxl==3.1.5
+# Background learning job (the optional 'learn' extra in pyproject.toml); versions as run on the Pi.
+numpy==2.5.5
+scipy==1.18.1
+scikit-learn==1.9.1
