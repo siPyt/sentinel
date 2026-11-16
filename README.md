@@ -80,6 +80,37 @@ See [docs/COMMISSIONING.md](docs/COMMISSIONING.md) for the full step-by-step
 commissioning checklist, and [systemd/sentinel.service](systemd/sentinel.service) for
 the hardened unit file used in production on the Raspberry Pi.
 
+## Daily door event log (CSV / Excel)
+
+Every confirmed door **open** and **close** is appended to a per-day CSV file
+(`airlock_events_YYYY-MM-DD.csv`, new file at midnight) in the folder set by
+`event_log.directory` -- default `~/Desktop/AirlockLogs`, so the files sit on the Pi
+desktop and open by double-click in Excel/LibreOffice. Columns:
+
+| Date | Time | Airlock | Door | Event | Tag Polled | Raw Value | PLC | Note |
+|------|------|---------|------|-------|------------|-----------|-----|------|
+
+- `Event` is `OPENED` or `CLOSED` (plus `PLC COMM LOST` / `PLC COMM RESTORED`, so a gap
+  in the log is never mistaken for "nothing happened").
+- `Tag Polled` is the PLC tag the state was read from (e.g. `Local:7:I.Data.0`) and
+  `Raw Value` is the bit as read (before polarity inversion).
+- The state of every door at startup is logged once with Note `initial state at startup`.
+- Only events are written (no per-poll rows), so SD wear is negligible.
+
+[config.airlocks.example.yaml](config.airlocks.example.yaml) is pre-filled with all 42
+door-position inputs from the Sigma-Aldrich tag listing. Per the ladder logic the
+door-ajar timers run on an XIO of each input, so **0 = open, 1 = closed**
+(`invert_logic: true`) -- verify each door with `--plc-test`. Set the real PLC IP, then:
+
+```powershell
+Copy-Item config.airlocks.example.yaml config.yaml
+python -m sentinel --config config.yaml --plc-test   # confirm tags + open/closed
+python -m sentinel --config config.yaml --log-only   # CSV logging only, no BACnet/BMS
+```
+
+Omit `--log-only` to run the BACnet bridge and the CSV log together. Under systemd,
+create the log folder as described in [systemd/sentinel.service](systemd/sentinel.service).
+
 ## Project layout
 
 ```
@@ -87,9 +118,12 @@ src/sentinel/
   config.py         Pydantic v2 config models + config.yaml loader
   plc_poller.py      Southbound pylogix CIP polling
   state_manager.py   Invert/debounce/pulse-stretch conditioning
+  event_log.py       Daily CSV door-event log
   bacnet_server.py   Northbound bacpypes3 BACnet/IP server
   main.py            CLI, asyncio orchestration, signal handling
+tests/
 systemd/sentinel.service
 docs/COMMISSIONING.md
 config.example.yaml
+config.airlocks.example.yaml
 ```

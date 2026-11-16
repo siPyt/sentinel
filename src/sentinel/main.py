@@ -19,12 +19,13 @@ import logging
 import signal
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from sentinel.bacnet_server import BACnetServer
-from sentinel.config import AppConfig, configure_logging, load_config
+from sentinel.config import AppConfig, DoorConfig, configure_logging, load_config
+from sentinel.event_log import EventLogger
 from sentinel.plc_poller import PLCPoller, PollResult
 from sentinel.state_manager import StateManager
 
@@ -36,6 +37,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="sentinel", description="Cleanroom Door State Bridge (airlock-sentinel)"
     )
     parser.add_argument("--config", required=True, type=Path, help="Path to config.yaml")
+    parser.add_argument(
+        "--log-only",
+        action="store_true",
+        help=(
+            "Poll the PLC(s) and write the daily door-event CSV files only; "
+            "no BACnet server is started and no bacnet: config section is needed."
+        ),
+    )
     parser.add_argument(
         "--plc-test",
         action="store_true",
@@ -72,18 +81,70 @@ async def _sleep_or_stop(stop_event: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(stop_event.wait(), timeout=seconds)
 
 
-async def run_daemon(config: AppConfig) -> None:
-    """Normal production daemon: southbound CIP polling -> northbound BACnet."""
-    logger.info("sentinel starting: %d PLC(s) configured", len(config.plcs))
+def _build_event_logger(config: AppConfig) -> EventLogger | None:
+    if not config.event_log.enabled:
+        return None
+    try:
+        event_logger = EventLogger(config.event_log.directory, config.event_log.file_prefix)
+    except OSError as exc:
+        logger.error("Event log disabled: cannot use %s (%s)", config.event_log.directory, exc)
+        return None
+    logger.info("Door events are logged to %s", event_logger.path_for(date.today()).parent)
+    return event_logger
+
+
+async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
+    """Production daemon: southbound CIP polling -> event log and (unless log_only) BACnet."""
+    logger.info(
+        "sentinel starting: %d PLC(s) configured%s",
+        len(config.plcs),
+        " (log-only, no BACnet)" if log_only else "",
+    )
+
+    event_logger = _build_event_logger(config)
+
+    def on_transition(
+        plc_id: str, door: DoorConfig, is_open: bool, raw: bool, is_initial: bool
+    ) -> None:
+        if event_logger is not None:
+            event_logger.log_event(
+                airlock=door.airlock,
+                door=door.object_name,
+                event="OPENED" if is_open else "CLOSED",
+                tag=door.tag,
+                raw_value=raw,
+                plc=plc_id,
+                note="initial state at startup" if is_initial else "",
+            )
+
+    def on_comm_change(plc_id: str, faulted: bool) -> None:
+        if event_logger is not None:
+            event_logger.log_event(
+                airlock="",
+                door="",
+                event="PLC COMM LOST" if faulted else "PLC COMM RESTORED",
+                tag="",
+                raw_value=None,
+                plc=plc_id,
+                note="door states unknown until restored" if faulted else "",
+            )
 
     pollers: dict[str, PLCPoller] = {plc.id: PLCPoller(plc) for plc in config.plcs}
-    state_manager = StateManager(config.plcs)
-    bacnet = BACnetServer(config)
+    state_manager = StateManager(config.plcs, on_transition, on_comm_change)
+
+    bacnet = None
+    if not log_only:
+        if config.bacnet is None:
+            raise SystemExit("error: config.yaml needs a 'bacnet:' section (or run with --log-only)")
+        from sentinel.bacnet_server import BACnetServer
+
+        bacnet = BACnetServer(config)
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
 
-    await bacnet.start()
+    if bacnet is not None:
+        await bacnet.start()
     poll_interval_s = config.service.poll_interval_ms / 1000.0
     fault_threshold_polls = config.service.fault_threshold_polls
 
@@ -98,26 +159,31 @@ async def run_daemon(config: AppConfig) -> None:
                 faulted = state_manager.mark_plc_comm(
                     plc.id, result.consecutive_failures, fault_threshold_polls
                 )
-                bacnet.set_plc_comm_ok(plc.id, healthy=not faulted)
+                if bacnet is not None:
+                    bacnet.set_plc_comm_ok(plc.id, healthy=not faulted)
                 if result.success:
                     for door in plc.doors:
                         reading = result.readings.get(door.tag)
                         raw = reading.value if reading is not None else None
                         state_manager.update_door(plc.id, door.tag, raw)
 
-            for door_state in state_manager.doors():
-                bacnet.set_door_state(
-                    door_state.config.bacnet_instance,
-                    door_state.effective_open,
-                    door_state.reliable,
-                )
+            if bacnet is not None:
+                for door_state in state_manager.doors():
+                    bacnet.set_door_state(
+                        door_state.config.bacnet_instance,
+                        door_state.effective_open,
+                        door_state.reliable,
+                    )
+            if event_logger is not None:
+                event_logger.flush_pending()
 
             elapsed = time.monotonic() - cycle_start
             await _sleep_or_stop(stop_event, max(0.0, poll_interval_s - elapsed))
     finally:
         logger.info("sentinel shutting down")
         await asyncio.gather(*(p.close() for p in pollers.values()), return_exceptions=True)
-        await bacnet.close()
+        if bacnet is not None:
+            await bacnet.close()
 
 
 async def run_plc_test(config: AppConfig) -> None:
@@ -191,7 +257,7 @@ def cli_main() -> None:
         if args.plc_test:
             asyncio.run(run_plc_test(config))
         else:
-            asyncio.run(run_daemon(config))
+            asyncio.run(run_daemon(config, log_only=args.log_only))
 
 
 if __name__ == "__main__":

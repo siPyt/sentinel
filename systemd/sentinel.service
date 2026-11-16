@@ -34,14 +34,19 @@ TimeoutStopSec=15
 KillSignal=SIGTERM
 
 # Logging: stdout/stderr only, captured by systemd-journald (see spec section 5 --
-# the daemon itself writes zero per-poll data to disk to protect SD card flash wear).
+# the daemon itself writes zero per-poll data to disk to protect SD card flash wear;
+# it only appends one CSV row per door open/close event (event_log: in config.yaml).
 StandardOutput=journal
 StandardError=journal
 
 # --- Security hardening (non-root, minimal privilege) ---
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# Home is read-only except the door-event CSV folder (event_log.directory in config.yaml).
+# Create it first: sudo mkdir -p /home/admin/Desktop/AirlockLogs &&
+#   sudo chown sentinel:admin /home/admin/Desktop/AirlockLogs && sudo chmod 2775 /home/admin/Desktop/AirlockLogs
+ProtectHome=read-only
+ReadWritePaths=-/home/admin/Desktop/AirlockLogs
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

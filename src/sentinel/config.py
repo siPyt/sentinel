@@ -42,6 +42,20 @@ class ServiceConfig(BaseModel):
     log_level: LogLevel = "INFO"
 
 
+class EventLogConfig(BaseModel):
+    """``event_log:`` section -- daily CSV of door open/close events."""
+
+    enabled: bool = True
+    directory: str = Field(
+        default="~/Desktop/AirlockLogs",
+        description=(
+            "Folder for the daily files (airlock_events_YYYY-MM-DD.csv). "
+            "'~' expands to the home directory of the user running sentinel."
+        ),
+    )
+    file_prefix: str = Field(default="airlock_events", min_length=1)
+
+
 class BACnetConfig(BaseModel):
     """``bacnet:`` section -- local BACnet/IP device identity and binding."""
 
@@ -100,6 +114,10 @@ class DoorConfig(BaseModel):
     bacnet_instance: int = Field(..., ge=0, le=4_194_302)
     object_name: str = Field(..., min_length=1)
     description: str = ""
+    airlock: str = Field(
+        default="",
+        description="Airlock/zone label shown in the event log (e.g. 'N1051/N1054/N1055').",
+    )
     invert_logic: bool = Field(
         default=False,
         description=(
@@ -163,7 +181,10 @@ class AppConfig(BaseModel):
     """Root ``config.yaml`` document."""
 
     service: ServiceConfig = Field(default_factory=ServiceConfig)
-    bacnet: BACnetConfig
+    event_log: EventLogConfig = Field(default_factory=EventLogConfig)
+    # Optional so the event-log-only mode (--log-only) needs no BMS settings;
+    # main.py requires it for the normal BACnet daemon.
+    bacnet: BACnetConfig | None = None
     plcs: list[PLCConfig] = Field(..., min_length=1)
 
     @model_validator(mode="after")

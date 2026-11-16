@@ -1,0 +1,393 @@
+# Example configuration for the Sigma-Aldrich airlock PLC (RSLogix 5000 project
+# SigmaAldrich.ACD), generated from the door-ajar timer rungs in the tag listing
+# (8.pdf). Copy to config.yaml, set the real PLC IP, then run:
+#
+#   python -m sentinel --config config.yaml --plc-test    # verify tags/polarity
+#   python -m sentinel --config config.yaml --log-only    # daily CSV event log only
+#
+# DOOR POLARITY: per the ladder logic (which takes precedence over the narrative PDF)
+# each door-ajar TON runs on an XIO of the door input, so bit 0 = door OPEN and
+# bit 1 = door CLOSED. That is invert_logic: true. Confirm every door with
+# --plc-test by physically opening it.
+#
+# Not included: Local:8:I.Data.9 (Doors_N1034A_34B_37B) -- its logic is a plain
+# XIC-to-output with no documented open/closed meaning.
+
+service:
+  poll_interval_ms: 500
+  fault_threshold_polls: 3
+  log_level: INFO
+
+event_log:
+  enabled: true
+  # One file per day: airlock_events_YYYY-MM-DD.csv (opens directly in Excel).
+  # "~" is the home folder of the user running sentinel (admin on the Pi).
+  directory: "~/Desktop/AirlockLogs"
+  file_prefix: "airlock_events"
+
+# Only needed for the BACnet daemon (not for --log-only).
+bacnet:
+  device_id: 1001
+  device_name: "AirlockSentinel-CR1"
+  vendor_id: 999
+  bind_address: "192.168.10.50/24:47808"
+
+plcs:
+  - id: plc1
+    name: "SIGMA_ALDRICH"
+    ip_address: "192.168.1.10" # PLACEHOLDER -- set the real controller IP
+    slot: 0
+    timeout_sec: 2.0
+    comm_ok_bacnet_instance: 900
+    doors:
+      # N1051/N1054/N1055 (DI01)
+      - tag: "Local:9:I.Data.0"
+        bacnet_instance: 1
+        object_name: "DOOR_N1051A"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1051A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.1"
+        bacnet_instance: 2
+        object_name: "DOOR_N1051B"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1051B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.2"
+        bacnet_instance: 3
+        object_name: "DOOR_N1054A"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1054A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.3"
+        bacnet_instance: 4
+        object_name: "DOOR_N1054B"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1054B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.4"
+        bacnet_instance: 5
+        object_name: "DOOR_N1054C"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1054C"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.5"
+        bacnet_instance: 6
+        object_name: "DOOR_N1055"
+        airlock: "N1051/N1054/N1055"
+        description: "Door N1055"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1002/N1003/N1004 (DI02)
+      - tag: "Local:7:I.Data.0"
+        bacnet_instance: 7
+        object_name: "DOOR_N1002A"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1002A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.1"
+        bacnet_instance: 8
+        object_name: "DOOR_N1002B"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1002B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.2"
+        bacnet_instance: 9
+        object_name: "DOOR_N1002C"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1002C"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.3"
+        bacnet_instance: 10
+        object_name: "DOOR_N1003A"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1003A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.4"
+        bacnet_instance: 11
+        object_name: "DOOR_N1003C"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1003C"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.5"
+        bacnet_instance: 12
+        object_name: "DOOR_N1004A"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1004A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.6"
+        bacnet_instance: 13
+        object_name: "DOOR_N1004B"
+        airlock: "N1002/N1003/N1004"
+        description: "Door N1004B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1021 (DI03)
+      - tag: "Local:9:I.Data.6"
+        bacnet_instance: 14
+        object_name: "DOOR_N1021A"
+        airlock: "N1021"
+        description: "Door N1021A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.7"
+        bacnet_instance: 15
+        object_name: "DOOR_N1021B"
+        airlock: "N1021"
+        description: "Door N1021B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.8"
+        bacnet_instance: 16
+        object_name: "DOOR_N1021C"
+        airlock: "N1021"
+        description: "Door N1021C"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1005 (DI04)
+      - tag: "Local:7:I.Data.10"
+        bacnet_instance: 17
+        object_name: "DOOR_N1005A"
+        airlock: "N1005"
+        description: "Door N1005A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.11"
+        bacnet_instance: 18
+        object_name: "DOOR_N1005B"
+        airlock: "N1005"
+        description: "Door N1005B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1006 (DI05)
+      - tag: "Local:7:I.Data.12"
+        bacnet_instance: 19
+        object_name: "DOOR_N1006A"
+        airlock: "N1006"
+        description: "Door N1006A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.13"
+        bacnet_instance: 20
+        object_name: "DOOR_N1006B"
+        airlock: "N1006"
+        description: "Door N1006B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1008 (DI06)
+      - tag: "Local:7:I.Data.14"
+        bacnet_instance: 21
+        object_name: "DOOR_N1008A"
+        airlock: "N1008"
+        description: "Door N1008A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.15"
+        bacnet_instance: 22
+        object_name: "DOOR_N1008B"
+        airlock: "N1008"
+        description: "Door N1008B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1009 (DI07)
+      - tag: "Local:8:I.Data.0"
+        bacnet_instance: 23
+        object_name: "DOOR_N1009A"
+        airlock: "N1009"
+        description: "Door N1009A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:8:I.Data.1"
+        bacnet_instance: 24
+        object_name: "DOOR_N1009B"
+        airlock: "N1009"
+        description: "Door N1009B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1011 (DI08)
+      - tag: "Local:8:I.Data.2"
+        bacnet_instance: 25
+        object_name: "DOOR_N1011A"
+        airlock: "N1011"
+        description: "Door N1011A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:8:I.Data.3"
+        bacnet_instance: 26
+        object_name: "DOOR_N1011B"
+        airlock: "N1011"
+        description: "Door N1011B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1012 (DI09)
+      - tag: "Local:9:I.Data.9"
+        bacnet_instance: 27
+        object_name: "DOOR_N1012"
+        airlock: "N1012"
+        description: "Door N1012"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.10"
+        bacnet_instance: 28
+        object_name: "DOOR_N1053"
+        airlock: "N1012"
+        description: "Door N1053"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1043 (DI10)
+      - tag: "Local:9:I.Data.11"
+        bacnet_instance: 29
+        object_name: "DOOR_N1043A"
+        airlock: "N1043"
+        description: "Door N1043A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.12"
+        bacnet_instance: 30
+        object_name: "DOOR_N1043B"
+        airlock: "N1043"
+        description: "Door N1043B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1044 (DI11)
+      - tag: "Local:9:I.Data.13"
+        bacnet_instance: 31
+        object_name: "DOOR_N1044A"
+        airlock: "N1044"
+        description: "Door N1044A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.14"
+        bacnet_instance: 32
+        object_name: "DOOR_N1044B"
+        airlock: "N1044"
+        description: "Door N1044B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:9:I.Data.15"
+        bacnet_instance: 33
+        object_name: "DOOR_N1044C"
+        airlock: "N1044"
+        description: "Door N1044C"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1052 (DI12)
+      - tag: "Local:7:I.Data.7"
+        bacnet_instance: 34
+        object_name: "DOOR_N1052A"
+        airlock: "N1052"
+        description: "Door N1052A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.8"
+        bacnet_instance: 35
+        object_name: "DOOR_N1052B"
+        airlock: "N1052"
+        description: "Door N1052B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:7:I.Data.9"
+        bacnet_instance: 36
+        object_name: "DOOR_N1058B"
+        airlock: "N1052"
+        description: "Door N1058B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1065 (DI13)
+      - tag: "Local:10:I.Data.0"
+        bacnet_instance: 37
+        object_name: "DOOR_N1065A"
+        airlock: "N1065"
+        description: "Door N1065A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:10:I.Data.1"
+        bacnet_instance: 38
+        object_name: "DOOR_N1065B"
+        airlock: "N1065"
+        description: "Door N1065B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1066 (DI14)
+      - tag: "Local:10:I.Data.2"
+        bacnet_instance: 39
+        object_name: "DOOR_N1066A"
+        airlock: "N1066"
+        description: "Door N1066A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:10:I.Data.3"
+        bacnet_instance: 40
+        object_name: "DOOR_N1066B"
+        airlock: "N1066"
+        description: "Door N1066B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      # N1068 (DI15)
+      - tag: "Local:10:I.Data.4"
+        bacnet_instance: 41
+        object_name: "DOOR_N1068A"
+        airlock: "N1068"
+        description: "Door N1068A"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50
+      - tag: "Local:10:I.Data.5"
+        bacnet_instance: 42
+        object_name: "DOOR_N1068B"
+        airlock: "N1068"
+        description: "Door N1068B"
+        invert_logic: true
+        min_open_hold_ms: 5000
+        debounce_ms: 50

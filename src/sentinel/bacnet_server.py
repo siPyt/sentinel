@@ -47,7 +47,8 @@ class BACnetServer:
     async def start(self) -> None:
         """Build the device, network port, and all point objects, then announce."""
         bacnet_cfg = self._config.bacnet
-        device_object = DeviceObject(
+        if bacnet_cfg is None:
+            raise ValueError("config.yaml has no 'bacnet:' section; required for the BACnet server") = DeviceObject(
             objectIdentifier=("device", bacnet_cfg.device_id),
             objectName=bacnet_cfg.device_name,
             vendorIdentifier=bacnet_cfg.vendor_id,

@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from sentinel.config import DoorConfig, PLCConfig
 
 logger = logging.getLogger(__name__)
+
+# (plc_id, door config, is_open, raw PLC bit, is_initial_reading)
+DoorTransitionCallback = Callable[[str, DoorConfig, bool, bool, bool], None]
+# (plc_id, faulted)
+CommChangeCallback = Callable[[str, bool], None]
 
 
 @dataclass
@@ -46,7 +52,14 @@ class DoorState:
 class StateManager:
     """Owns per-door conditioning state for every configured PLC/door pair."""
 
-    def __init__(self, plcs: list[PLCConfig]) -> None:
+    def __init__(
+        self,
+        plcs: list[PLCConfig],
+        on_transition: DoorTransitionCallback | None = None,
+        on_comm_change: CommChangeCallback | None = None,
+    ) -> None:
+        self._on_transition = on_transition
+        self._on_comm_change = on_comm_change
         self._doors: dict[tuple[str, str], DoorState] = {
             (plc.id, door.tag): DoorState(config=door, plc_id=plc.id)
             for plc in plcs
@@ -75,11 +88,14 @@ class StateManager:
         )
 
         if new_debounced is not None and new_debounced != state.debounced_open:
+            is_initial = state.debounced_open is None
             if new_debounced:
                 logger.info("OPENED: %s (PLC %s)", cfg.object_name, plc_id)
-            elif state.debounced_open is not None:
+            elif not is_initial:
                 logger.info("CLOSED: %s (PLC %s)", cfg.object_name, plc_id)
             state.debounced_open = new_debounced
+            if self._on_transition is not None:
+                self._on_transition(plc_id, cfg, new_debounced, bool(raw_value), is_initial)
 
         if state.debounced_open:
             # (Re-)arm/extend the hold window on every confirmed-open sample.
@@ -111,12 +127,19 @@ class StateManager:
         statusFlags.fault=True, clearing automatically on recovery.
         """
         faulted = consecutive_failures >= fault_threshold_polls
+        changed = False
         for state in self._doors.values():
             if state.plc_id != plc_id:
                 continue
-            if state.reliable and faulted:
+            if not changed and state.reliable and faulted:
                 logger.warning("PLC %s communication fault; doors marked unreliable", plc_id)
-            elif not state.reliable and not faulted:
+                if self._on_comm_change is not None:
+                    self._on_comm_change(plc_id, True)
+                changed = True
+            elif not changed and not state.reliable and not faulted:
                 logger.info("PLC %s communication recovered; doors marked reliable", plc_id)
+                if self._on_comm_change is not None:
+                    self._on_comm_change(plc_id, False)
+                changed = True
             state.reliable = not faulted
         return faulted
