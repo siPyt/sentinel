@@ -53,9 +53,14 @@ class PLCPoller:
     def __init__(self, plc_config: PLCConfig) -> None:
         self.config = plc_config
         self._logger = logging.getLogger(f"{__name__}.{plc_config.id}")
-        self._tags: list[str] = [door.tag for door in plc_config.doors] + [
+        self._tags: list[str] = [door.tag for door in plc_config.doors]
+        # Optional door-ajar timer bits: read in the same batch, but a failure
+        # on one of these never counts as a PLC comm fault.
+        self._timer_tags: set[str] = {
             door.ajar_timer_tag for door in plc_config.doors if door.ajar_timer_tag
-        ]
+        }
+        self._tags += sorted(self._timer_tags)
+        self._bad_timer_tags: set[str] = set()
 
         self._comm = PLC()
         self._comm.IPAddress = plc_config.ip_address
@@ -100,12 +105,17 @@ class PLCPoller:
         all_ok = True
         for resp in responses:
             ok = resp.Status == "Success" and resp.Value is not None
-            all_ok = all_ok and ok
             readings[resp.TagName] = TagReading(
                 tag=resp.TagName,
                 value=bool(resp.Value) if ok else None,
                 status=resp.Status,
             )
+            if resp.TagName in self._timer_tags:
+                # A bad/unreadable timer tag must not blind the door monitoring:
+                # report it once and keep going; its reading stays None.
+                self._track_timer_tag(resp.TagName, ok, resp.Status)
+            else:
+                all_ok = all_ok and ok
 
         if not all_ok:
             self._handle_failure("one or more tags returned a non-Success status")
@@ -130,6 +140,22 @@ class PLCPoller:
             latency_ms=latency_ms,
             consecutive_failures=0,
         )
+
+    def _track_timer_tag(self, tag: str, ok: bool, status: str) -> None:
+        """Warn once when an optional timer tag is unreadable; note when it recovers."""
+        if not ok and tag not in self._bad_timer_tags:
+            self._bad_timer_tags.add(tag)
+            self._logger.warning(
+                "PLC %s: door-ajar timer tag '%s' is unreadable (%s); its "
+                "DOOR-AJAR TIMER DONE events are not logged until it reads OK. "
+                "Door monitoring is unaffected.",
+                self.config.id,
+                tag,
+                status,
+            )
+        elif ok and tag in self._bad_timer_tags:
+            self._bad_timer_tags.discard(tag)
+            self._logger.info("PLC %s: timer tag '%s' is readable again", self.config.id, tag)
 
     def _handle_failure(self, reason: str) -> None:
         was_ok = self.consecutive_failures == 0

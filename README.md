@@ -102,6 +102,8 @@ desktop and open by double-click in Excel/LibreOffice. Columns:
 - `Tag Polled` is the PLC tag the state was read from (e.g. `Local:7:I.Data.0`, or the
   timer `.DN` bit for timer events) and `Raw Value` is the bit as read (before polarity
   inversion).
+- A misspelled/unreadable timer tag is warned about once and skipped; it never stops door
+  logging or raises a PLC comm fault. An unreadable *door* tag still fails the PLC read.
 - The state of every door at startup is logged once with Note `initial state at startup`.
 - Only events are written (no per-poll rows), so SD wear is negligible.
 
