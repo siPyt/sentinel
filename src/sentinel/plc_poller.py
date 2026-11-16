@@ -53,7 +53,9 @@ class PLCPoller:
     def __init__(self, plc_config: PLCConfig) -> None:
         self.config = plc_config
         self._logger = logging.getLogger(f"{__name__}.{plc_config.id}")
-        self._tags: list[str] = [door.tag for door in plc_config.doors]
+        self._tags: list[str] = [door.tag for door in plc_config.doors] + [
+            door.ajar_timer_tag for door in plc_config.doors if door.ajar_timer_tag
+        ]
 
         self._comm = PLC()
         self._comm.IPAddress = plc_config.ip_address

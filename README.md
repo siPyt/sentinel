@@ -87,13 +87,21 @@ Every confirmed door **open** and **close** is appended to a per-day CSV file
 `event_log.directory` -- default `~/Desktop/AirlockLogs`, so the files sit on the Pi
 desktop and open by double-click in Excel/LibreOffice. Columns:
 
-| Date | Time | Airlock | Door | Event | Tag Polled | Raw Value | PLC | Note |
-|------|------|---------|------|-------|------------|-----------|-----|------|
+| Date | Time | Airlock | Door | Event | Open Duration | Open Duration (s) | Tag Polled | Raw Value | PLC | Note |
+|------|------|---------|------|-------|---------------|-------------------|------------|-----------|-----|------|
 
 - `Event` is `OPENED` or `CLOSED` (plus `PLC COMM LOST` / `PLC COMM RESTORED`, so a gap
   in the log is never mistaken for "nothing happened").
-- `Tag Polled` is the PLC tag the state was read from (e.g. `Local:7:I.Data.0`) and
-  `Raw Value` is the bit as read (before polarity inversion).
+- `DOOR-AJAR TIMER DONE` is logged the moment the PLC's own 30 s door-ajar timer
+  (`Door_Nxxxx_Timer.DN`, set per door with `ajar_timer_tag`) finishes, i.e. the door was
+  left open too long and the airlock violation latched.
+- `Open Duration` (`H:MM:SS`) and `Open Duration (s)` are filled on `CLOSED` rows (total
+  time the door was open) and on `DOOR-AJAR TIMER DONE` rows (time open so far). The Note
+  says so if the door was already open at startup or the PLC dropped off the network
+  while it was open, because the duration is then only approximate.
+- `Tag Polled` is the PLC tag the state was read from (e.g. `Local:7:I.Data.0`, or the
+  timer `.DN` bit for timer events) and `Raw Value` is the bit as read (before polarity
+  inversion).
 - The state of every door at startup is logged once with Note `initial state at startup`.
 - Only events are written (no per-poll rows), so SD wear is negligible.
 

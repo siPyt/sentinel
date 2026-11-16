@@ -24,8 +24,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from sentinel.config import AppConfig, DoorConfig, configure_logging, load_config
-from sentinel.event_log import EventLogger
+from sentinel.config import AppConfig, configure_logging, load_config
+from sentinel.event_log import DoorEventRecorder, EventLogger
 from sentinel.plc_poller import PLCPoller, PollResult
 from sentinel.state_manager import StateManager
 
@@ -102,35 +102,14 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
     )
 
     event_logger = _build_event_logger(config)
-
-    def on_transition(
-        plc_id: str, door: DoorConfig, is_open: bool, raw: bool, is_initial: bool
-    ) -> None:
-        if event_logger is not None:
-            event_logger.log_event(
-                airlock=door.airlock,
-                door=door.object_name,
-                event="OPENED" if is_open else "CLOSED",
-                tag=door.tag,
-                raw_value=raw,
-                plc=plc_id,
-                note="initial state at startup" if is_initial else "",
-            )
-
-    def on_comm_change(plc_id: str, faulted: bool) -> None:
-        if event_logger is not None:
-            event_logger.log_event(
-                airlock="",
-                door="",
-                event="PLC COMM LOST" if faulted else "PLC COMM RESTORED",
-                tag="",
-                raw_value=None,
-                plc=plc_id,
-                note="door states unknown until restored" if faulted else "",
-            )
+    recorder = DoorEventRecorder(event_logger) if event_logger is not None else None
 
     pollers: dict[str, PLCPoller] = {plc.id: PLCPoller(plc) for plc in config.plcs}
-    state_manager = StateManager(config.plcs, on_transition, on_comm_change)
+    state_manager = StateManager(
+        config.plcs,
+        recorder.on_transition if recorder else None,
+        recorder.on_comm_change if recorder else None,
+    )
 
     bacnet = None
     if not log_only:
@@ -166,6 +145,10 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                         reading = result.readings.get(door.tag)
                         raw = reading.value if reading is not None else None
                         state_manager.update_door(plc.id, door.tag, raw)
+                        if recorder is not None and door.ajar_timer_tag:
+                            timer = result.readings.get(door.ajar_timer_tag)
+                            if timer is not None and timer.value is not None:
+                                recorder.on_timer(plc.id, door, timer.value)
 
             if bacnet is not None:
                 for door_state in state_manager.doors():
@@ -222,6 +205,21 @@ def _render_plc_test_table(config: AppConfig, results: list[PollResult]) -> None
             rows.append(
                 (plc.id, door.tag, _fmt_raw(raw), door_state, f"{result.latency_ms:.1f}", status)
             )
+            if door.ajar_timer_tag:
+                timer = result.readings.get(door.ajar_timer_tag)
+                dn = timer.value if timer is not None else None
+                timer_state = "?" if dn is None else ("TIMER DONE" if dn else "timer idle")
+                timer_status = timer.status if timer is not None else (result.error or "n/a")
+                rows.append(
+                    (
+                        plc.id,
+                        door.ajar_timer_tag,
+                        _fmt_raw(dn),
+                        timer_state,
+                        f"{result.latency_ms:.1f}",
+                        timer_status,
+                    )
+                )
 
     header = f"{'PLC':<8} {'TAG':<34} {'RAW':<4} {'DOOR STATE':<10} {'LAT(ms)':>8}  STATUS"
     lines = [

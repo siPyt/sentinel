@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sentinel.config import load_config
-from sentinel.event_log import HEADER, EventLogger
+from sentinel.event_log import HEADER, DoorEventRecorder, EventLogger
 from sentinel.state_manager import StateManager
 
 REPO = Path(__file__).resolve().parent.parent
@@ -23,11 +23,11 @@ def test_daily_files_and_columns(tmp_path):
     day1 = _rows(tmp_path / "airlock_events_2026-11-16.csv")
     day2 = _rows(tmp_path / "airlock_events_2026-11-17.csv")
     assert day1[0] == list(HEADER)
-    assert day1[1][:8] == [
-        "2026-11-16", "23:59:59.005", "N1065", "DOOR_N1065A", "OPENED",
+    assert day1[1][:10] == [
+        "2026-11-16", "23:59:59.005", "N1065", "DOOR_N1065A", "OPENED", "", "",
         "Local:10:I.Data.0", "0", "plc1",
     ]
-    assert day2[1][4] == "CLOSED" and day2[1][6] == "1"
+    assert day2[1][4] == "CLOSED" and day2[1][8] == "1"
 
 
 def test_unwritable_rows_are_retried(tmp_path, monkeypatch):
@@ -44,6 +44,52 @@ def test_unwritable_rows_are_retried(tmp_path, monkeypatch):
     monkeypatch.setattr(EventLogger, "_append", original)
     log.flush_pending()
     assert len(_rows(next(tmp_path.glob("*.csv")))) == 2
+
+
+def _recorder(tmp_path):
+    clock = {"t": 1000.0}
+    recorder = DoorEventRecorder(EventLogger(tmp_path), clock=lambda: clock["t"])
+    config = load_config(REPO / "config.airlocks.example.yaml")
+    return recorder, clock, config.plcs[0].doors[0]
+
+
+def _events(tmp_path):
+    rows = _rows(next(tmp_path.glob("*.csv")))[1:]
+    return [(r[4], r[5], r[6], r[7], r[10]) for r in rows]
+
+
+def test_open_duration_and_timer_done_events(tmp_path):
+    recorder, clock, door = _recorder(tmp_path)
+    plc = "plc1"
+    recorder.on_timer(plc, door, False)
+    recorder.on_transition(plc, door, True, False, False)
+    clock["t"] += 31.2
+    recorder.on_timer(plc, door, True)
+    recorder.on_timer(plc, door, True)  # still done: must not log again
+    clock["t"] += 3571.8
+    recorder.on_transition(plc, door, False, True, False)
+
+    assert _events(tmp_path) == [
+        ("OPENED", "", "", "Local:9:I.Data.0", ""),
+        ("DOOR-AJAR TIMER DONE", "0:00:31", "31.2", "Door_N1051A_Timer.DN",
+         "door left open past the PLC door-ajar timer preset; airlock violation latched"),
+        ("CLOSED", "1:00:03", "3603.0", "Local:9:I.Data.0", ""),
+    ]
+
+
+def test_duration_notes_for_startup_and_comm_loss(tmp_path):
+    recorder, clock, door = _recorder(tmp_path)
+    recorder.on_transition("plc1", door, True, False, True)  # already open at startup
+    clock["t"] += 10
+    recorder.on_transition("plc1", door, False, True, False)
+    recorder.on_transition("plc1", door, True, False, False)
+    recorder.on_comm_change("plc1", True)
+    clock["t"] += 5
+    recorder.on_transition("plc1", door, False, True, False)
+
+    notes = [e[4] for e in _events(tmp_path)]
+    assert notes[1] == "door was already open at startup; duration counted from startup"
+    assert notes[4] == "PLC comm was lost while open; duration is approximate"
 
 
 def test_comm_loss_and_recovery_reported_once_per_plc():

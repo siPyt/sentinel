@@ -118,6 +118,14 @@ class DoorConfig(BaseModel):
         default="",
         description="Airlock/zone label shown in the event log (e.g. 'N1051/N1054/N1055').",
     )
+    ajar_timer_tag: str | None = Field(
+        default=None,
+        description=(
+            "PLC door-ajar timer done bit for this door (e.g. 'Door_N1051A_Timer.DN'). "
+            "When set it is polled and a 'DOOR-AJAR TIMER DONE' event is logged the "
+            "moment the door has been left open past the timer preset."
+        ),
+    )
     invert_logic: bool = Field(
         default=False,
         description=(
@@ -170,7 +178,9 @@ class PLCConfig(BaseModel):
     @field_validator("doors")
     @classmethod
     def _unique_tags(cls, doors: list[DoorConfig]) -> list[DoorConfig]:
-        tags = [d.tag for d in doors]
+        tags = [d.tag for d in doors] + [
+            d.ajar_timer_tag for d in doors if d.ajar_timer_tag is not None
+        ]
         dupes = sorted({t for t in tags if tags.count(t) > 1})
         if dupes:
             raise ValueError(f"duplicate door tag(s) configured on same PLC: {dupes}")
