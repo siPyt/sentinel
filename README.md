@@ -4,7 +4,7 @@
 Raspberry Pi OS that bridges cleanroom airlock door position tags from Allen-Bradley
 RSLogix 5000 v17 PLCs to a Siemens Apogee / Insight BMS. It also keeps a tamper-evident
 daily door log in Excel, flags interlock violations and failing switches, shows a live
-cockpit on the Pi's screen, and learns each door's normal in the background.
+cockpit on the Pi's screen, and learns door and emergency-release patterns in the background.
 **[One-page-per-topic brochure (PDF)](docs/Sentinel-Brochure.pdf)**.
 
 ```
@@ -119,10 +119,14 @@ with `python scripts/make_example_log.py`). Columns:
   inversion).
 - A misspelled/unreadable timer tag is warned about once and skipped; it never stops door
   logging or raises a PLC comm fault. An unreadable *door* tag still fails the PLC read.
+- Emergency releases are polled as two complementary signals: the PLC release latch
+  (`Nxxxx_Emergency_Release_Latch`) and the direct button input. Activation/clear rows use
+  the latch, so a button press is not missed between 500 ms polls.
 - Only events are written (no per-poll rows), so SD wear is negligible.
 
 [config.airlocks.example.yaml](config.airlocks.example.yaml) is pre-filled with all 42
-door-position inputs from the Sigma-Aldrich tag listing. Per the ladder logic the
+door-position inputs and all 15 emergency-release points from the Sigma-Aldrich tag
+listing. Per the ladder logic the
 door-ajar timers run on an XIO of each input, so **0 = open, 1 = closed**
 (`invert_logic: true`) -- verify each door with `--plc-test`. Set the real PLC IP, then:
 
@@ -144,6 +148,7 @@ All of these are rule-based (no trained models), configured under `alerts:` /
 |-------|---------|
 | `INTERLOCK VIOLATION` / `INTERLOCK CLEARED` | Two doors of one airlock open together for at least `interlock_hold_s` (default 1 s). The group defaults to the airlock label, with combined labels such as `N1051/N1054/N1055` split by room number; override per door with `interlock_group`. `CLEARED` carries how long it lasted. |
 | `DOOR CHATTERING` | A door changed state `chatter_changes` times (default 8) within `chatter_window_s` (30 s): usually a failing switch or wiring. Logged once per burst. |
+| `EMERGENCY RELEASE ACTIVATED` / `CLEARED` | The PLC emergency-release latch changed state. The direct button input remains visible separately on the cockpit. |
 | `SENTINEL STARTED` | Each (re)start. `Details` holds the software version, the configuration fingerprint, whether the clock is synchronised to a time server, and how long it was down. |
 | `SENTINEL STOPPED` | A normal shutdown. A crash or power cut never writes this, so the next start can tell the difference. |
 | `DATA GAP` | Written at start after an unexpected stop: the period during which nothing was monitored (dated from a once-a-minute heartbeat). |
@@ -170,10 +175,16 @@ Sentinel serves a read-only status page on the Pi itself (`http://127.0.0.1:8080
 loopback only, configured by the `dashboard:` section). It shows PLC online/offline,
 every door as a CLOSED / OPEN / LEFT OPEN - TIMED OUT / UNKNOWN tile grouped by
 airlock, a "needs attention" box, a flashing alarm bar for interlock violations and doors
-left open (visual only; *Silence flashing* only affects that window), recent events and
+left open or emergency releases (visual only; *Silence flashing* only affects that window),
+live emergency-release latch/button tiles, recent events and
 system health (PLC link, ledger, clock-sync status). It reads sentinel's in-memory state,
 so it opens **no extra PLC connection** and cannot write to the PLC or the logs. On the
-Pi, use the **Sentinel Cockpit** desktop icon.
+Pi, use the **Sentinel Cockpit** desktop icon. Drag the central divider horizontally and
+the lower-right handle on any card vertically to resize panes; the main split is remembered
+in that browser. Double-click a flagged tile (non-green health, open/timed out, interlock,
+chatter, ML flag, or active emergency release) to open a concise diagnostic window. It starts
+with what is happening, likely causes and the recommended check; ML evidence, recent events,
+and raw PLC tags are collapsed under optional detail sections.
 
 Each door tile carries a **health heart** from the last 7 days of events: green (healthy)
 through yellow and orange to a red broken heart (unhealthy). It deducts for chatter
@@ -182,8 +193,9 @@ have drifted much longer than the earlier week; hover a door to see the reasons.
 advisory only: it is never written to the logs and never changes an alarm.
 
 `python -m sentinel --config config.yaml --demo` serves the same page with simulated
-doors on port 8081 (clearly bannered DEMO, no PLC access, no log files written). It opens
-with a staged scene (interlock violation, chattering switch, door left open, broken hearts)
+doors and emergency releases on port 8081 (clearly bannered DEMO, no PLC access, no log
+files written). It opens with a staged scene (active emergency-release latch, interlock
+violation, chattering switch, door left open, broken hearts, and double-click diagnostics)
 for screenshots. On the Pi, use the **Sentinel Demo** desktop icon
 ([scripts/sentinel-demo.sh](scripts/sentinel-demo.sh)).
 
@@ -201,15 +213,16 @@ crashed or the PLC was offline are not learned from):
 | From day | What |
 |----------|------|
 | 14 | Per-door baselines: openings per weekday/weekend, typical and long open times, timed-out share. |
-| 30 | **Anomaly detection** (Isolation Forest on each door's own robust z-scores: openings, open times, timeouts, chatter, interlock, night use) and an **EWMA drift watch** on open time. |
+| 30 | **Door anomaly detection** (Isolation Forest on each door's own robust z-scores: openings, open times, timeouts, chatter, interlock, night use), an **EWMA drift watch** on open time, plus a separate sparse-event Isolation Forest for emergency releases (daily and 7-day counts, recurrence, night use). A robust per-release burst detector is used alongside it so one isolated legitimate activation is not flagged. |
 | 60 | **Trends** (Theil-Sen slope with a Kendall test) on open time and timeout share, **sister-door** comparison, and **unusual site traffic** by weekday and hour. |
 | 180 | The **six-month study**: a one-off `ML-Study-<date>.xlsx` ranking every door, then ongoing monitoring. |
 
 Findings are `alert` / `watch` / `info`, each with the numbers behind it (what was seen, what is
 usual) and a suggested check. They appear on the cockpit's **Learning** card (progress toward day 180
-plus the latest findings, with an *ML FLAG* marker on the door) and in a weekly Excel report
+plus the latest findings, with an *ML FLAG* marker on the door or release point) and in a weekly Excel report
 (the first once there is a week of data),
-`ML-Reports/ML-Report-<date>.xlsx` (Summary, Findings, Door baselines, How to read), kept apart from
+`ML-Reports/ML-Report-<date>.xlsx` (Summary, Findings, Door baselines, Emergency releases,
+How to read), kept apart from
 the GMP day files. State and the model details (`model_info.json`: library versions, training size,
 ledger head code) are in `/var/lib/sentinel/ml/`; `history.csv` keeps one row per door per night so
 the learning itself can be reviewed. Findings are held back until there is enough data, so a new

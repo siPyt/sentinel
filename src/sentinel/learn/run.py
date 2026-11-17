@@ -63,7 +63,12 @@ def run_learning(config: AppConfig, now: datetime | None = None, force_report: b
     now = now or datetime.now()
     today = now.date()
     ledger_path = ledger_directory(config) / "ledger.jsonl"
-    dataset = load_dataset(ledger_path, now)
+    release_names = {
+        release.object_name: release.airlock
+        for plc in config.plcs
+        for release in plc.emergency_releases
+    }
+    dataset = load_dataset(ledger_path, now, release_names)
     analysis = analyze(dataset, today, now, config.learning.target_days)
 
     folder = ml_directory(config)

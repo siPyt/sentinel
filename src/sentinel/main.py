@@ -180,10 +180,15 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
             recorder.on_transition(plc_id, door, is_open, raw, is_initial)
         monitor.on_transition(plc_id, door, is_initial)
 
+    def on_release_transition(plc_id, release, active, raw, is_initial) -> None:
+        if recorder is not None:
+            recorder.on_release_transition(plc_id, release, active, raw, is_initial)
+
     state_manager = StateManager(
         config.plcs,
         on_transition,
         recorder.on_comm_change if recorder else None,
+        on_release_transition,
     )
 
     bacnet = None
@@ -226,6 +231,11 @@ async def run_daemon(config: AppConfig, log_only: bool = False) -> None:
                             timer = result.readings.get(door.ajar_timer_tag)
                             if timer is not None and timer.value is not None:
                                 recorder.on_timer(plc.id, door, timer.value)
+                    for release in plc.emergency_releases:
+                        reading = result.readings.get(release.tag)
+                        state_manager.update_release(
+                            plc.id, release.tag, reading.value if reading is not None else None
+                        )
 
             monitor.evaluate(
                 {
@@ -343,8 +353,36 @@ def _render_plc_test_table(config: AppConfig, results: list[PollResult]) -> None
                         timer_status,
                     )
                 )
+        for release in plc.emergency_releases:
+            reading = result.readings.get(release.tag)
+            active = reading.value if reading is not None else None
+            release_state = "?" if active is None else ("ACTIVE" if active else "clear")
+            status = reading.status if reading is not None else (result.error or "n/a")
+            rows.append(
+                (
+                    plc.id,
+                    release.tag,
+                    _fmt_raw(active),
+                    release_state,
+                    f"{result.latency_ms:.1f}",
+                    status,
+                )
+            )
+            if release.button_tag:
+                button = result.readings.get(release.button_tag)
+                pressed = button.value if button is not None else None
+                rows.append(
+                    (
+                        plc.id,
+                        release.button_tag,
+                        _fmt_raw(pressed),
+                        "?" if pressed is None else ("PRESSED" if pressed else "released"),
+                        f"{result.latency_ms:.1f}",
+                        button.status if button is not None else (result.error or "n/a"),
+                    )
+                )
 
-    header = f"{'PLC':<8} {'TAG':<34} {'RAW':<4} {'DOOR STATE':<10} {'LAT(ms)':>8}  STATUS"
+    header = f"{'PLC':<8} {'TAG':<38} {'RAW':<4} {'STATE':<10} {'LAT(ms)':>8}  STATUS"
     lines = [
         "sentinel --plc-test: southbound-only commissioning view (Ctrl+C to exit)",
         "",

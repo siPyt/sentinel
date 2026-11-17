@@ -39,6 +39,9 @@ from sentinel.event_log import (
     EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
     EVENT_PLC_ONLINE,
+    EVENT_RELEASE,
+    EVENT_RELEASE_AT_STARTUP,
+    EVENT_RELEASE_CLEARED,
     EVENT_STARTED,
     EVENT_STOPPED,
     EVENT_TIMED_OUT,
@@ -54,6 +57,8 @@ logger = logging.getLogger(__name__)
 STATE_OPEN = "OPEN"
 STATE_CLOSED = "CLOSED"
 STATE_UNKNOWN = "UNKNOWN"
+STATE_ACTIVE = "ACTIVE"
+STATE_CLEAR = "CLEAR"
 
 PLC_ONLINE = "ONLINE"
 PLC_RETRYING = "RETRYING"
@@ -85,6 +90,7 @@ class StatusBoard:
         self._clock = ("unknown", 0.0)  # (status, when it was checked)
         self._plcs: dict[str, dict] = {}
         self._doors: dict[tuple[str, str], dict] = {}
+        self._releases: dict[tuple[str, str], dict] = {}
         for plc in config.plcs:
             self._plcs[plc.id] = {
                 "id": plc.id,
@@ -108,6 +114,18 @@ class StatusBoard:
                     "raw": None,
                     "since": None,
                     "timer_done": None,
+                }
+            for release in plc.emergency_releases:
+                self._releases[(plc.id, release.tag)] = {
+                    "plc": plc.id,
+                    "airlock": release.airlock or "(no airlock label)",
+                    "name": release.object_name,
+                    "tag": release.tag,
+                    "button_tag": release.button_tag,
+                    "state": STATE_UNKNOWN,
+                    "raw": None,
+                    "button_raw": None,
+                    "since": None,
                 }
         self._events: deque[dict] = deque(maxlen=max_events)
         self._counts: Counter[str] = Counter()
@@ -158,6 +176,27 @@ class StatusBoard:
         """Active interlock violations and chattering doors (see alerts.AlertMonitor.snapshot)."""
         with self._lock:
             self._alerts = alerts
+
+    def set_release(
+        self,
+        plc_id: str,
+        tag: str,
+        *,
+        active: bool | None,
+        raw: bool | None,
+        button_raw: bool | None,
+        reliable: bool,
+    ) -> None:
+        with self._lock:
+            release = self._releases[(plc_id, tag)]
+            state = STATE_UNKNOWN if not reliable or active is None else (
+                STATE_ACTIVE if active else STATE_CLEAR
+            )
+            if state != release["state"]:
+                release["since"] = time.time()
+            release["state"] = state
+            release["raw"] = None if raw is None else int(raw)
+            release["button_raw"] = None if button_raw is None else int(button_raw)
 
     def load_health_history(self, ledger_path) -> int:
         """Rebuild the last 7 days of door health from the ledger (call once at startup)."""
@@ -218,8 +257,10 @@ class StatusBoard:
         clock = self._clock_status()
         learning = self._learning()
         ml_by_door: dict[str, list[str]] = {}
+        ml_details_by_door: dict[str, list[dict]] = {}
         for finding in (learning or {}).get("findings", []):
             ml_by_door.setdefault(finding["door"], []).append(f"{finding['severity']}: {finding['title']}")
+            ml_details_by_door.setdefault(finding["door"], []).append(dict(finding))
         with self._lock:
             counts = self._counts
             return {
@@ -234,8 +275,21 @@ class StatusBoard:
                 "poll_interval_ms": self._config.service.poll_interval_ms,
                 "plcs": [dict(p) for p in self._plcs.values()],
                 "doors": [
-                    dict(d, health=self._health.score(d["name"], now), ml=ml_by_door.get(d["name"], []))
+                    dict(
+                        d,
+                        health=self._health.score(d["name"], now),
+                        ml=ml_by_door.get(d["name"], []),
+                        ml_details=ml_details_by_door.get(d["name"], []),
+                    )
                     for d in self._doors.values()
+                ],
+                "releases": [
+                    dict(
+                        r,
+                        ml=ml_by_door.get(r["name"], []),
+                        ml_details=ml_details_by_door.get(r["name"], []),
+                    )
+                    for r in self._releases.values()
                 ],
                 "learning": learning,
                 "alerts": self._alerts,
@@ -249,6 +303,10 @@ class StatusBoard:
                     "interlock": counts[EVENT_INTERLOCK],
                     "chatter": counts[EVENT_CHATTER],
                     "gaps": counts[EVENT_GAP],
+                    "releases": (
+                        counts[EVENT_RELEASE] + counts[EVENT_RELEASE_AT_STARTUP]
+                    ),
+                    "release_cleared": counts[EVENT_RELEASE_CLEARED],
                 },
                 "log": self._log_info(),
             }
@@ -287,6 +345,7 @@ class StatusBoard:
 def publish(board: StatusBoard, config: AppConfig, results_by_plc, state_manager, pollers) -> None:
     """Copy the latest poll results and door states onto the board (once per cycle)."""
     door_states = {(s.plc_id, s.config.tag): s for s in state_manager.doors()}
+    release_states = {(s.plc_id, s.config.tag): s for s in state_manager.releases()}
     threshold = config.service.fault_threshold_polls
     for plc in config.plcs:
         result = results_by_plc[plc.id]
@@ -320,6 +379,22 @@ def publish(board: StatusBoard, config: AppConfig, results_by_plc, state_manager
                 state=state,
                 raw=None if reading is None else reading.value,
                 timer_done=None if timer is None else timer.value,
+            )
+        for release in plc.emergency_releases:
+            st = release_states[(plc.id, release.tag)]
+            reading = result.readings.get(release.tag) if result.success else None
+            button = (
+                result.readings.get(release.button_tag)
+                if result.success and release.button_tag
+                else None
+            )
+            board.set_release(
+                plc.id,
+                release.tag,
+                active=st.active,
+                raw=None if reading is None else reading.value,
+                button_raw=None if button is None else button.value,
+                reliable=st.reliable,
             )
 
 
@@ -467,13 +542,32 @@ def _seed_demo_history(board: StatusBoard) -> None:
         board.on_event(_demo_row(None, event, detail=detail, ago_s=ago))
 
 
-def _demo_learning(doors: list) -> dict:
+def _demo_learning(doors: list, releases: list) -> dict:
     """Made-up learning-job output (about 7 weeks in) so the Learning card can be shown."""
     def at(index: int) -> str:
         return doors[min(index, len(doors) - 1)].cfg.object_name
 
     today = date.today().isoformat()
     findings = [
+        *(
+            [{
+                "severity": "watch",
+                "door": releases[0].object_name,
+                "airlock": releases[0].airlock,
+                "kind": "unusual_release_pattern",
+                "date": today,
+                "title": "Emergency-release use repeated outside its usual pattern",
+                "evidence": "3 activations in 7 days; usual learned count is 0.",
+                "suggest": "Verify use and inspect the emergency button, contacts, interlock and PLC events.",
+                "probable_causes": [
+                    "Repeated legitimate emergency or maintenance operation.",
+                    "Bouncing button contacts or intermittent wiring.",
+                    "PLC latch-reset or associated safety-control behavior.",
+                ],
+            }]
+            if releases
+            else []
+        ),
         {"severity": "alert", "door": at(41), "airlock": "N1068", "kind": "anomalous_day", "date": today,
          "title": "Unusual day on " + datetime.now().strftime("%d-%b"),
          "evidence": "share of openings timed out: 0.4 (usually 0.0); longest-typical open time (s): 75 (usually 12)",
@@ -510,8 +604,9 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
     plc_id = config.plcs[0].id
     monitor = AlertMonitor(config, sink=_DemoSink(board))
     doors = [_DemoDoor(d) for d in config.plcs[0].doors]
+    releases = config.plcs[0].emergency_releases
     _seed_demo_health(board, doors, rng)
-    board.set_learning_demo(_demo_learning(doors))
+    board.set_learning_demo(_demo_learning(doors, releases))
     _seed_demo_history(board)
     by_group: dict[str, list[_DemoDoor]] = {}
     for door in doors:
@@ -523,6 +618,7 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
     next_offline, offline_until = now + 120.0, 0.0
     bounce: dict = {"door": None, "left": 0, "at": 0.0, "silent": False}
     scene = {"until": 0.0, "next": 0.0, "chatter_door": None, "rebounce": 0.0}
+    release_states: dict[str, bool] = {release.tag: False for release in releases}
 
     def idle(group) -> bool:
         return not any(d.open_at is not None or d.is_open for d in group)
@@ -563,6 +659,31 @@ def run_demo_feed(board: StatusBoard, config: AppConfig, stop: threading.Event) 
         if offline_until and not offline:
             offline_until = 0.0
             board.on_event(_demo_row(None, EVENT_PLC_ONLINE))
+
+        for index, release in enumerate(releases):
+            active = not offline and staged and index == 0
+            if active != release_states[release.tag] and not offline:
+                board.on_event(
+                    _demo_row(
+                        release,
+                        EVENT_RELEASE if active else EVENT_RELEASE_CLEARED,
+                        raw=1 if active else 0,
+                        detail=(
+                            "PLC emergency-release latch active"
+                            if active
+                            else "PLC emergency-release latch cleared"
+                        ),
+                    )
+                )
+            release_states[release.tag] = active
+            board.set_release(
+                plc_id,
+                release.tag,
+                active=None if offline else active,
+                raw=None if offline else active,
+                button_raw=None if offline else (active and time.time() % 30 < 3),
+                reliable=not offline,
+            )
 
         board.set_plc(
             plc_id,

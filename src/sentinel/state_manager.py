@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from sentinel.config import DoorConfig, PLCConfig
+from sentinel.config import DoorConfig, EmergencyReleaseConfig, PLCConfig
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 DoorTransitionCallback = Callable[[str, DoorConfig, bool, bool, bool], None]
 # (plc_id, faulted)
 CommChangeCallback = Callable[[str, bool], None]
+# (plc_id, emergency release config, is_active, raw latch bit, is_initial_reading)
+ReleaseTransitionCallback = Callable[[str, EmergencyReleaseConfig, bool, bool, bool], None]
 
 
 @dataclass
@@ -49,6 +51,14 @@ class DoorState:
     reliable: bool = True  # driven by the owning PLC's comm health
 
 
+@dataclass
+class EmergencyReleaseState:
+    config: EmergencyReleaseConfig
+    plc_id: str
+    active: bool | None = None
+    reliable: bool = True
+
+
 class StateManager:
     """Owns per-door conditioning state for every configured PLC/door pair."""
 
@@ -57,17 +67,50 @@ class StateManager:
         plcs: list[PLCConfig],
         on_transition: DoorTransitionCallback | None = None,
         on_comm_change: CommChangeCallback | None = None,
+        on_release_transition: ReleaseTransitionCallback | None = None,
     ) -> None:
         self._on_transition = on_transition
         self._on_comm_change = on_comm_change
+        self._on_release_transition = on_release_transition
         self._doors: dict[tuple[str, str], DoorState] = {
             (plc.id, door.tag): DoorState(config=door, plc_id=plc.id)
             for plc in plcs
             for door in plc.doors
         }
+        self._releases: dict[tuple[str, str], EmergencyReleaseState] = {
+            (plc.id, release.tag): EmergencyReleaseState(config=release, plc_id=plc.id)
+            for plc in plcs
+            for release in plc.emergency_releases
+        }
 
     def doors(self) -> list[DoorState]:
         return list(self._doors.values())
+
+    def releases(self) -> list[EmergencyReleaseState]:
+        return list(self._releases.values())
+
+    def update_release(
+        self, plc_id: str, tag: str, raw_value: bool | None
+    ) -> EmergencyReleaseState:
+        """Track the PLC's emergency-release latch, including startup state."""
+        state = self._releases[(plc_id, tag)]
+        if raw_value is None:
+            return state
+        active = bool(raw_value)
+        if active != state.active:
+            initial = state.active is None
+            state.active = active
+            logger.info(
+                "%s: emergency release %s (PLC %s)",
+                "ACTIVE" if active else "CLEARED",
+                state.config.object_name,
+                plc_id,
+            )
+            if self._on_release_transition is not None:
+                self._on_release_transition(
+                    plc_id, state.config, active, active, initial
+                )
+        return state
 
     def update_door(
         self, plc_id: str, tag: str, raw_value: bool | None, now: float | None = None
@@ -128,7 +171,8 @@ class StateManager:
         """
         faulted = consecutive_failures >= fault_threshold_polls
         changed = False
-        for state in self._doors.values():
+        monitored = [*self._doors.values(), *self._releases.values()]
+        for state in monitored:
             if state.plc_id != plc_id:
                 continue
             if not changed and state.reliable and faulted:

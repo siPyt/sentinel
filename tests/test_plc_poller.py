@@ -51,6 +51,22 @@ def test_bad_door_tag_still_fails_the_plc():
     assert not result.success and result.consecutive_failures == 1
 
 
+def test_emergency_release_latch_and_button_are_polled():
+    poller, _ = _poller(set())
+    release = poller.config.emergency_releases[0]
+    result = asyncio.run(poller.poll())
+    assert release.tag in result.readings
+    assert release.button_tag in result.readings
+    assert result.readings[release.tag].status == "Success"
+
+
+def test_bad_release_tag_fails_the_plc():
+    config = load_config(REPO / "config.airlocks.example.yaml")
+    release = config.plcs[0].emergency_releases[0]
+    poller, _ = _poller({release.tag})
+    assert asyncio.run(poller.poll()).success is False
+
+
 def test_unreachable_plc_does_not_warn_per_timer_tag(caplog):
     poller, door = _poller(set(poller_tags()))
     with caplog.at_level(logging.WARNING):

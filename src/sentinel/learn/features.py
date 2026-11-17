@@ -20,6 +20,9 @@ from sentinel.event_log import (
     EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
     EVENT_PLC_ONLINE,
+    EVENT_RELEASE,
+    EVENT_RELEASE_AT_STARTUP,
+    EVENT_RELEASE_CLEARED,
     EVENT_STARTED,
     EVENT_STOPPED,
     EVENT_TIMED_OUT,
@@ -52,6 +55,12 @@ class DayStats:
 
 
 @dataclass
+class ReleaseDayStats:
+    activations: int = 0
+    hourly: list[int] = field(default_factory=lambda: [0] * 24)
+
+
+@dataclass
 class Dataset:
     doors: dict[str, dict[date, DayStats]]
     airlock: dict[str, str]
@@ -59,6 +68,8 @@ class Dataset:
     first_day: date | None
     records: int
     head: str
+    releases: dict[str, dict[date, ReleaseDayStats]] = field(default_factory=dict)
+    release_airlock: dict[str, str] = field(default_factory=dict)
 
     def coverage(self, day: date) -> float:
         return max(0.0, 1.0 - self.down_s.get(day, 0.0) / 86400.0)
@@ -102,9 +113,20 @@ def _add_down(down: dict[date, float], start: datetime, end: datetime) -> None:
         start = stop
 
 
-def load_dataset(ledger_path: Path, now: datetime) -> Dataset:
+def load_dataset(
+    ledger_path: Path,
+    now: datetime,
+    release_names: dict[str, str] | None = None,
+) -> Dataset:
     doors: dict[str, dict[date, DayStats]] = defaultdict(lambda: defaultdict(DayStats))
     airlock: dict[str, str] = {}
+    releases: dict[str, dict[date, ReleaseDayStats]] = defaultdict(
+        lambda: defaultdict(ReleaseDayStats)
+    )
+    release_airlock: dict[str, str] = {}
+    for name, label in (release_names or {}).items():
+        releases[name]  # establish configured points even if they have never activated
+        release_airlock[name] = label
     down: dict[date, float] = {}
     intervals: list[tuple[datetime, datetime]] = []
     stop_at: datetime | None = None
@@ -142,6 +164,14 @@ def load_dataset(ledger_path: Path, now: datetime) -> Dataset:
             if began is not None:
                 intervals.append((began, when))
         names = [n.strip() for n in (rec.get("door") or "").split(" + ") if n.strip()]
+        if event in (EVENT_RELEASE, EVENT_RELEASE_AT_STARTUP, EVENT_RELEASE_CLEARED):
+            for name in names:
+                release_airlock.setdefault(name, rec.get("airlock", ""))
+                if event != EVENT_RELEASE_CLEARED:
+                    stats = releases[name][when.date()]
+                    stats.activations += 1
+                    stats.hourly[when.hour] += 1
+            continue
         for name in names:
             airlock.setdefault(name, rec.get("airlock", ""))
             stats = doors[name][when.date()]
@@ -161,7 +191,16 @@ def load_dataset(ledger_path: Path, now: datetime) -> Dataset:
     intervals += [(began, now) for began in offline_at.values()]
     for start, end in intervals:
         _add_down(down, start, end)
-    return Dataset({d: dict(v) for d, v in doors.items()}, airlock, down, first_day, records, head)
+    return Dataset(
+        {d: dict(v) for d, v in doors.items()},
+        airlock,
+        down,
+        first_day,
+        records,
+        head,
+        {r: dict(v) for r, v in releases.items()},
+        release_airlock,
+    )
 
 
 def _percentile(values: list[float], fraction: float) -> float:

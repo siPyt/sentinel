@@ -27,6 +27,7 @@ EXPLAIN = (
     ("More openings are timing out", "A growing share of openings run past the 30 s door-ajar timer."),
     ("Slower than its sister doors", "The door's typical open time is far above the other doors in the same airlock."),
     ("Unusual activity", "A whole-site hour with far more openings than that weekday and hour normally has."),
+    ("Repeated emergency releases", "A single day has repeated emergency-release activations beyond the point's usual sparse-event baseline. One activation alone is not treated as abnormal."),
     ("Learning stages", "Day 14 baselines; day 30 anomaly detection and drift watch; day 60 trends, sister-door and traffic comparisons; day 180 six-month study."),
     ("Not a GMP record", "Advisory only. It is built from the tamper-evident ledger, never changes the logs, and does not control any alarm. Confirm findings on the door before acting."),
 )
@@ -74,6 +75,10 @@ def write_report(path: Path, analysis: Analysis, now_text: str, study: bool = Fa
         ("Model", analysis.model_info.get("model", "none yet") + (
             f" (trained {analysis.model_info['trained']}, {analysis.model_info['training_door_days']} door-days, "
             f"scikit-learn {analysis.model_info['scikit_learn']})" if analysis.model_info.get("trained") else "")),
+        ("Emergency-release model", analysis.release_model_info.get("model", "none yet") + (
+            f" (trained on {analysis.release_model_info['training_point_days']} point-days)"
+            if analysis.release_model_info.get("trained") else ""
+        )),
         ("Important", "Advisory only. Not part of the GMP record; it never changes the logs or any alarm."),
     ]
     for offset, (label, value) in enumerate(rows, start=3):
@@ -115,6 +120,43 @@ def write_report(path: Path, analysis: Analysis, now_text: str, study: bool = Fa
         _style_row(base, base.max_row, 13)
         base.cell(base.max_row, 8).number_format = "0.0%"
     base.auto_filter.ref = f"A1:M{max(2, base.max_row)}"
+
+    releases = workbook.create_sheet("Emergency releases")
+    _header(
+        releases,
+        (
+            "Release point",
+            "Airlock",
+            "Monitored days",
+            "Activations (30 d)",
+            "Usual activations / day",
+            "Busiest day",
+            "Active days (30 d)",
+            "Night share",
+            "Last activation",
+        ),
+        (32, 22, 12, 15, 18, 12, 15, 12, 14),
+    )
+    if not analysis.release_baselines:
+        releases.append(["", "", "", "", "No activations recorded yet", "", "", "", ""])
+        _style_row(releases, 2, 9)
+    for item in analysis.release_baselines:
+        releases.append(
+            [
+                item["release"],
+                item["airlock"],
+                item["days"],
+                item["activations_30d"],
+                item["median_daily"],
+                item["busiest_day"],
+                item["active_days_30d"],
+                item["night_share"],
+                item["last_activation"],
+            ]
+        )
+        _style_row(releases, releases.max_row, 9)
+        releases.cell(releases.max_row, 8).number_format = "0.0%"
+    releases.auto_filter.ref = f"A1:I{max(2, releases.max_row)}"
 
     guide = workbook.create_sheet("How to read")
     _header(guide, ("Term", "Meaning"), (30, 120))

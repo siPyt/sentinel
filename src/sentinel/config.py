@@ -224,6 +224,24 @@ class DoorConfig(BaseModel):
     )
 
 
+class EmergencyReleaseConfig(BaseModel):
+    """One emergency door-release button and its PLC latching indication."""
+
+    tag: str = Field(
+        ...,
+        min_length=1,
+        description="PLC latch tag that records an emergency release activation.",
+    )
+    button_tag: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional direct PLC input for the emergency pushbutton's current state.",
+    )
+    object_name: str = Field(..., min_length=1)
+    airlock: str = Field(default="")
+    description: str = ""
+
+
 class PLCConfig(BaseModel):
     """One Allen-Bradley controller and the doors polled from it."""
 
@@ -239,6 +257,7 @@ class PLCConfig(BaseModel):
         description="BinaryInputObject instance for this PLC's PLC_<NAME>_COMM_OK point.",
     )
     doors: list[DoorConfig] = Field(..., min_length=1)
+    emergency_releases: list[EmergencyReleaseConfig] = Field(default_factory=list)
 
     @field_validator("ip_address")
     @classmethod
@@ -259,6 +278,23 @@ class PLCConfig(BaseModel):
         if dupes:
             raise ValueError(f"duplicate door tag(s) configured on same PLC: {dupes}")
         return doors
+
+    @model_validator(mode="after")
+    def _unique_emergency_release_tags(self) -> "PLCConfig":
+        tags = [d.tag for d in self.doors]
+        tags += [
+            d.ajar_timer_tag
+            for d in self.doors
+            if d.ajar_timer_tag is not None
+        ]
+        for release in self.emergency_releases:
+            tags.append(release.tag)
+            if release.button_tag is not None:
+                tags.append(release.button_tag)
+        dupes = sorted({t for t in tags if tags.count(t) > 1})
+        if dupes:
+            raise ValueError(f"duplicate polled tag(s) configured on PLC '{self.id}': {dupes}")
+        return self
 
 
 class AppConfig(BaseModel):

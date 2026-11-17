@@ -16,7 +16,15 @@ from datetime import date, datetime, timedelta
 
 import numpy as np
 
-from sentinel.learn.features import FEATURE_LABELS, FEATURES, Dataset, DayStats, day_features
+from sentinel.learn.features import (
+    FEATURE_LABELS,
+    FEATURES,
+    Dataset,
+    DayStats,
+    ReleaseDayStats,
+    day_features,
+    NIGHT_HOURS,
+)
 
 BASELINE_DAYS = 14  # first baselines
 ANOMALY_DAYS = 30  # anomaly detection and drift watch
@@ -33,6 +41,8 @@ class Analysis:
     baselines: list[dict]
     model_info: dict
     scores: dict[str, float] = field(default_factory=dict)  # door -> anomaly score of the latest day
+    release_baselines: list[dict] = field(default_factory=list)
+    release_model_info: dict = field(default_factory=dict)
 
 
 def _phase(days: int, target: int) -> tuple[str, str]:
@@ -85,9 +95,52 @@ def _fmt(value: float) -> str:
 
 
 def _finding(door, airlock, kind, severity, title, evidence, suggest, when: date | None) -> dict:
+    probable_causes = {
+        "drift_open_time": [
+            "Door closer, hinge or latch wear increasing resistance.",
+            "A switch or wiring problem changing the recorded open/close time.",
+            "A sustained change in staffing, cleaning or traffic patterns.",
+        ],
+        "anomalous_day": [
+            "An abnormal operating event combined several unusual door conditions.",
+            "A sticking closer, failing position switch or temporary blockage.",
+            "Planned maintenance, cleaning or an unusual traffic surge.",
+        ],
+        "trend_open_time": [
+            "Progressive closer, hinge, seal or latch degradation.",
+            "Dust/debris or misalignment increasing the door travel time.",
+            "A gradual operational change rather than a physical fault.",
+        ],
+        "trend_timeouts": [
+            "Door is sticking, propped open or used for staged transfers.",
+            "Closer force or latch engagement is deteriorating.",
+            "Magnetic interlock or operator workflow changed.",
+        ],
+        "slower_than_peers": [
+            "Door-specific closer, hinge, seal or latch condition.",
+            "Position-switch placement or intermittent wiring fault.",
+            "Different use pattern for this side of the airlock.",
+        ],
+        "unusual_traffic": [
+            "Planned cleaning, maintenance, shift change or exceptional transfer activity.",
+            "Switch chatter counted as real door transitions.",
+            "Unexpected access requiring operational review.",
+        ],
+        "emergency_release_burst": [
+            "Repeated legitimate emergency/maintenance operation.",
+            "Button contact chatter or a wiring fault.",
+            "PLC latch reset behavior or safety-control issue.",
+        ],
+        "unusual_release_pattern": [
+            "Unplanned use at an unusual time or frequency.",
+            "Sticky/bouncing pushbutton contacts or intermittent field wiring.",
+            "Related interlock/door behavior or PLC latch reset problem.",
+        ],
+    }.get(kind, ["Confirm the recorded event against site operations and equipment condition."])
     return {
         "door": door, "airlock": airlock, "kind": kind, "severity": severity, "title": title,
-        "evidence": evidence, "suggest": suggest, "date": when.isoformat() if when else "",
+        "evidence": evidence, "probable_causes": probable_causes, "suggest": suggest,
+        "date": when.isoformat() if when else "",
     }
 
 
@@ -114,25 +167,41 @@ def analyze(ds: Dataset, today: date, now: datetime, target_days: int = 180) -> 
         "stage": stage, "phase": phase_text, "doors": len(ds.doors), "records": ds.records,
         "ledger_head": ds.head[:12], "first_day": ds.first_day.isoformat() if ds.first_day else "",
         "last_run": now.isoformat(timespec="seconds"),
+        "release_points": len(ds.releases),
     }
     model_info: dict = {"trained": None, "note": "Not trained yet: needs 30 days of data."}
     findings: list[dict] = []
     scores: dict[str, float] = {}
     baselines = _baselines(ds, days)
+    release_baselines = _release_baselines(ds, days)
     if count < BASELINE_DAYS:
-        return Analysis(progress, findings, baselines, model_info)
+        return Analysis(
+            progress,
+            findings,
+            baselines,
+            model_info,
+            release_baselines=release_baselines,
+            release_model_info={"trained": None, "note": "Needs 30 days of monitored emergency-release history."},
+        )
 
     recent = set(days[-RECENT_DAYS:])
     if count >= ANOMALY_DAYS:
         findings += _drift_findings(ds, days)
         anomalies, model_info, scores = _anomaly_findings(ds, days, recent, now)
         findings += anomalies
+        release_findings, release_model_info = _release_anomaly_findings(ds, days, recent, now)
+        findings += release_findings
+        findings += _release_burst_findings(ds, days)
+    else:
+        release_model_info = {"trained": None, "note": "Needs 30 days of monitored emergency-release history."}
     if count >= TREND_DAYS:
         findings += _trend_findings(ds, days)
         findings += _peer_findings(ds, days)
         findings += _traffic_findings(ds, days)
     findings.sort(key=lambda f: (SEVERITY_ORDER[f["severity"]], f["door"]))
-    return Analysis(progress, findings, baselines, model_info, scores)
+    return Analysis(
+        progress, findings, baselines, model_info, scores, release_baselines, release_model_info
+    )
 
 
 def _baselines(ds: Dataset, days: list[date]) -> list[dict]:
@@ -159,6 +228,206 @@ def _baselines(ds: Dataset, days: list[date]) -> list[dict]:
             "interlock_30d": sum(per_day.get(d, DayStats()).interlock for d in last30),
         })
     return rows
+
+
+def _release_baselines(ds: Dataset, days: list[date]) -> list[dict]:
+    rows = []
+    last30 = days[-30:]
+    for release in sorted(ds.releases):
+        per_day = ds.releases[release]
+        counts = [per_day.get(day, ReleaseDayStats()).activations for day in last30]
+        active_days = [day for day in last30 if per_day.get(day, ReleaseDayStats()).activations]
+        hours = [
+            hour
+            for day in last30
+            for hour, count in enumerate(
+                per_day.get(day, ReleaseDayStats()).hourly
+            )
+            for _ in range(count)
+        ]
+        rows.append(
+            {
+                "release": release,
+                "airlock": ds.release_airlock.get(release, ""),
+                "days": len(last30),
+                "activations_30d": sum(counts),
+                "median_daily": round(statistics.median(counts), 2) if counts else 0.0,
+                "busiest_day": max(counts, default=0),
+                "active_days_30d": len(active_days),
+                "night_share": round(
+                    sum(hour in NIGHT_HOURS for hour in hours) / len(hours), 3
+                )
+                if hours
+                else None,
+                "last_activation": max(active_days).isoformat() if active_days else "",
+            }
+        )
+    return rows
+
+
+def _release_burst_findings(ds: Dataset, days: list[date]) -> list[dict]:
+    """Flag repeated emergency-release use with a robust sparse-event baseline."""
+    findings = []
+    history, recent = days[-37:-7], days[-7:]
+    if len(history) < 14:
+        return findings
+    for release in sorted(ds.releases):
+        per_day = ds.releases[release]
+        usual = [per_day.get(day, ReleaseDayStats()).activations for day in history]
+        median = statistics.median(usual)
+        mad = statistics.median(abs(value - median) for value in usual) * 1.4826
+        limit = median + max(2.0, 4.0 * mad)
+        for day in recent:
+            count = per_day.get(day, ReleaseDayStats()).activations
+            if count >= 2 and count > limit:
+                findings.append(
+                    _finding(
+                        release,
+                        ds.release_airlock.get(release, ""),
+                        "emergency_release_burst",
+                        "watch",
+                        f"Repeated emergency releases on {day:%d-%b}",
+                        (
+                            f"{count} activation(s) in one day; usual daily count "
+                            f"was about {_fmt(median)} over the preceding 30 monitored days."
+                        ),
+                        (
+                            "Confirm the activations were expected and inspect the "
+                            "door controls, interlocks and emergency hardware."
+                        ),
+                        day,
+                    )
+                )
+    return findings
+
+
+def _release_features(ds: Dataset, release: str, days: list[date]) -> np.ndarray:
+    """Sparse-event point-day features for a separate multivariate release model."""
+    per_day = ds.releases.get(release, {})
+    rows = []
+    since = 30.0
+    recent_counts: list[int] = []
+    for day in days:
+        stats = per_day.get(day, ReleaseDayStats())
+        count = stats.activations
+        recent_counts.append(count)
+        seven_day = sum(recent_counts[-7:])
+        if count:
+            since = 0.0
+        else:
+            since = min(30.0, since + 1.0)
+        rows.append(
+            [
+                float(count),
+                float(seven_day),
+                float(since),
+                sum(stats.hourly[hour] for hour in NIGHT_HOURS) / count if count else 0.0,
+                1.0 if count else 0.0,
+            ]
+        )
+    return np.array(rows, dtype=float)
+
+
+def _release_anomaly_findings(
+    ds: Dataset, days: list[date], recent: set[date], now: datetime
+) -> tuple[list[dict], dict]:
+    """IsolationForest for multivariate release patterns, separate from door traffic."""
+    from sklearn import __version__ as sk_version
+    from sklearn.ensemble import IsolationForest
+
+    releases = sorted(ds.releases)
+    matrices = {release: _release_features(ds, release, days) for release in releases}
+    total_activations = sum(matrix[:, 0].sum() for matrix in matrices.values())
+    info = {
+        "trained": None,
+        "note": "No emergency-release activations yet; learning remains in baseline mode.",
+    }
+    if not releases or total_activations == 0:
+        return [], info
+    stacked = np.vstack(list(matrices.values()))
+    z, med = _robust_release_z(stacked)
+    if len(stacked) < 200:
+        info["note"] = "Not enough release-point days to train yet."
+        return [], info
+    forest = IsolationForest(
+        n_estimators=150,
+        contamination=0.015,
+        random_state=17,
+    ).fit(z)
+    scores = forest.decision_function(z)
+    threshold = float(np.percentile(scores, 1.5))
+    info = {
+        "trained": now.isoformat(timespec="seconds"),
+        "model": "IsolationForest",
+        "n_estimators": 150,
+        "contamination": 0.015,
+        "training_point_days": int(len(stacked)),
+        "release_points": len(releases),
+        "features": [
+            "daily activations",
+            "rolling 7-day activations",
+            "days since activation",
+            "night activation share",
+            "active day",
+        ],
+        "scikit_learn": sk_version,
+        "ledger_records": ds.records,
+    }
+    findings = []
+    offset = 0
+    for release in releases:
+        matrix = matrices[release]
+        point_z = z[offset: offset + len(days)]
+        point_scores = scores[offset: offset + len(days)]
+        offset += len(days)
+        flagged = [
+            i
+            for i, day in enumerate(days)
+            if day in recent
+            and matrix[i, 0] > 0
+            and point_scores[i] < threshold
+            and float(np.max(np.abs(point_z[i]))) >= 3.0
+        ]
+        if not flagged:
+            continue
+        index = flagged[-1]
+        reasons = []
+        labels = (
+            "activations today",
+            "activations in 7 days",
+            "days since prior activation",
+            "night activation share",
+        )
+        for feature, label in zip(range(4), labels):
+            if abs(point_z[index, feature]) >= 3.0:
+                reasons.append(
+                    f"{label}: {_fmt(matrix[index, feature])} "
+                    f"(usually {_fmt(med[feature])})"
+                )
+        findings.append(
+            _finding(
+                release,
+                ds.release_airlock.get(release, ""),
+                "unusual_release_pattern",
+                "watch",
+                f"Unusual emergency-release pattern on {days[index]:%d-%b}",
+                "; ".join(reasons) or "Activation timing differed from its learned pattern.",
+                (
+                    "Verify the use was legitimate, inspect the emergency button/contacts, "
+                    "and compare related door and PLC events."
+                ),
+                days[index],
+            )
+        )
+    return findings, info
+
+
+def _robust_release_z(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    med = np.median(matrix, axis=0)
+    mad = np.median(np.abs(matrix - med), axis=0) * 1.4826
+    floors = np.array([0.5, 1.0, 1.0, 0.05, 0.25])
+    scale = np.maximum(mad, floors)
+    return np.clip((matrix - med) / scale, -10.0, 10.0), med
 
 
 def _drift_findings(ds: Dataset, days: list[date]) -> list[dict]:

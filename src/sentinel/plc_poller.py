@@ -54,6 +54,12 @@ class PLCPoller:
         self.config = plc_config
         self._logger = logging.getLogger(f"{__name__}.{plc_config.id}")
         self._tags: list[str] = [door.tag for door in plc_config.doors]
+        self._tags += [
+            tag
+            for release in plc_config.emergency_releases
+            for tag in (release.tag, release.button_tag)
+            if tag is not None
+        ]
         # Optional door-ajar timer bits: read in the same batch, but a failure
         # on one of these never counts as a PLC comm fault.
         self._timer_tags: set[str] = {

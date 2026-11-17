@@ -83,6 +83,78 @@ NOTES
   weekly Excel reports in /home/admin/Desktop/AirlockLogs/ML-Reports). Advisory only; reads the
   ledger, never changes logs or alarms. Run now: sudo systemctl start sentinel-learn.service
   (output: journalctl -u sentinel-learn). Needs numpy/scipy/scikit-learn in /opt/sentinel/.venv.
+
+MACHINE LEARNING CAPABILITIES
+============================
+Advisory monitoring only. Sentinel never uses these models to control, bypass, reset,
+or write to the PLC. Findings are held until enough well-monitored data exists.
+Stopped, crashed, and PLC-offline periods are excluded from learning.
+
+DOORS
+-----
+Day 14:
+- Normal openings per weekday and weekend day.
+- Typical and 95th-percentile open duration.
+- Timed-out-share, chatter, interlock, and night-use baselines.
+
+Day 30:
+- Isolation Forest anomaly detection on robust door-specific z-scores:
+  openings, typical/long open time, timeout share, chatter, interlocks, and night use.
+- EWMA drift watch for door-open times moving away from their established level.
+
+Day 60:
+- Theil-Sen trends with Kendall significance testing for open-time and timeout-rate drift.
+- Sister-door comparisons inside the same airlock.
+- Site-wide traffic anomalies by weekday and hour.
+
+Patterns the models can help surface:
+- Longer or shorter door-opening durations.
+- Sudden increases in openings or door-ajar timeouts.
+- Repeated switch chatter or interlock violations.
+- One door becoming slower than its sister doors.
+- Progressive mechanical drift that may indicate closer, hinge, latch, seal,
+  obstruction, alignment, switch-placement, or wiring trouble.
+- A change in staffing, cleaning, maintenance, transfer, or traffic patterns.
+- Unusual nighttime activity.
+
+EMERGENCY RELEASES
+------------------
+Sentinel separately learns each configured PLC emergency-release latch:
+- Daily and rolling seven-day activation counts.
+- Time since the previous activation.
+- Active-day versus no-activation-day patterns.
+- Night activation share.
+- Robust daily burst detection, alongside a separate Isolation Forest model.
+
+Patterns the models can help surface:
+- Several releases in one day.
+- Several activations unusually close together.
+- A rising seven-day count.
+- Use at an unusual time or unusually high frequency.
+- Long inactivity followed by repeated releases.
+
+Useful follow-up checks include:
+- Whether operation was legitimate or planned.
+- Sticky, damaged, or bouncing button contacts.
+- Loose connector or intermittent field-wiring faults.
+- PLC latch/reset behavior or related safety/interlock operation.
+- Cleaning, maintenance, training, shift, or workflow changes.
+
+COCKPIT AND REPORTING
+---------------------
+- Flagged doors/releases can be double-clicked for a concise diagnosis:
+  current condition, likely causes, and recommended checks.
+- ML evidence, related event history, and raw PLC tags are under expandable details.
+- Weekly Excel reports contain door and emergency-release baselines/findings.
+
+LIMITS
+------
+- ML identifies unusual behavior; it cannot prove a physical root cause.
+- No remaining-life or "failure in X days" prediction is currently included.
+- No automatic root-cause classification, safety response, or PLC write is included.
+- Findings require monitored history and remain unavailable or less reliable while
+  the PLC is offline. The current PLC link at 192.168.1.30 must be restored before
+  new live door/release observations can be learned.
 - INTERNET GATE (Pi desktop / VNC): browsing from the Pi requires a username and password.
   Chromium and Firefox are forced through a local authenticating proxy (tinyproxy on
   127.0.0.1:8888, config /etc/tinyproxy/tinyproxy.conf, root-only), and an nftables rule

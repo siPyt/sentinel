@@ -10,6 +10,8 @@ from sentinel.event_log import (
     EVENT_OPENED,
     EVENT_OPENED_AT_STARTUP,
     EVENT_PLC_OFFLINE,
+    EVENT_RELEASE,
+    EVENT_RELEASE_CLEARED,
     EVENT_STARTED,
     EVENT_TIMED_OUT,
     HEADER,
@@ -184,6 +186,22 @@ def test_open_duration_and_timer_done_events(tmp_path):
         (EVENT_OPENED, "", "", "Local:9:I.Data.0"),
         (EVENT_TIMED_OUT, "31 sec", "31.2", "Door_N1051A_Timer.DN"),
         (EVENT_CLOSED, "1 hr 0 min 3 sec", "3603.0", "Local:9:I.Data.0"),
+    ]
+
+
+def test_emergency_release_activation_and_clear_are_logged_once(tmp_path):
+    recorder, clock, _ = _recorder(tmp_path)
+    config = load_config(REPO / "config.airlocks.example.yaml")
+    release = config.plcs[0].emergency_releases[0]
+    recorder.on_release_transition("plc1", release, False, False, True)
+    recorder.on_release_transition("plc1", release, True, True, False)
+    clock["t"] += 12.5
+    recorder.on_release_transition("plc1", release, False, False, False)
+
+    events = _events(tmp_path)
+    assert events == [
+        (EVENT_RELEASE, "", "", release.tag),
+        (EVENT_RELEASE_CLEARED, "12 sec", "12.5", release.tag),
     ]
 
 

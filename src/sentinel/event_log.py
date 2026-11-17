@@ -40,7 +40,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.properties import PageSetupProperties
 
-from sentinel.config import DoorConfig
+from sentinel.config import DoorConfig, EmergencyReleaseConfig
 from sentinel.integrity import CHECK_CODE_LENGTH, Ledger, PreviousRun
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,9 @@ EVENT_GAP = "DATA GAP"
 EVENT_INTERLOCK = "INTERLOCK VIOLATION"
 EVENT_INTERLOCK_CLEARED = "INTERLOCK CLEARED"
 EVENT_CHATTER = "DOOR CHATTERING"
+EVENT_RELEASE = "EMERGENCY RELEASE ACTIVATED"
+EVENT_RELEASE_CLEARED = "EMERGENCY RELEASE CLEARED"
+EVENT_RELEASE_AT_STARTUP = "EMERGENCY RELEASE ACTIVE (at startup)"
 
 # One logged event, in this order: date, time, airlock, door, event, "open for" text,
 # tag, raw 0/1, plc, open seconds, details. ``Row`` is what listeners (the cockpit) get.
@@ -109,6 +112,9 @@ _EVENT_STYLES: dict[str, tuple[str, str]] = {
     EVENT_INTERLOCK: ("FF7C80", "7F0000"),
     EVENT_INTERLOCK_CLEARED: ("E2EFDA", "375623"),
     EVENT_CHATTER: ("F8CBAD", "843C0C"),
+    EVENT_RELEASE: ("FF7C80", "7F0000"),
+    EVENT_RELEASE_CLEARED: ("E2EFDA", "375623"),
+    EVENT_RELEASE_AT_STARTUP: ("FF7C80", "7F0000"),
 }
 # Routine events colour only the "What Happened" cell so a long day stays easy to
 # scan; these need attention, so their whole row is highlighted.
@@ -122,6 +128,9 @@ _FULL_ROW_EVENTS = {
     EVENT_INTERLOCK,
     EVENT_INTERLOCK_CLEARED,
     EVENT_CHATTER,
+    EVENT_RELEASE,
+    EVENT_RELEASE_CLEARED,
+    EVENT_RELEASE_AT_STARTUP,
 }
 
 KEY_ROWS: tuple[tuple[str, str], ...] = (
@@ -143,6 +152,18 @@ KEY_ROWS: tuple[tuple[str, str], ...] = (
         EVENT_CHATTER,
         "The door changed between open and closed many times in a few seconds. This is "
         "usually a failing switch or loose wiring, not real traffic. Logged once per burst.",
+    ),
+    (
+        EVENT_RELEASE,
+        "The PLC's emergency-release latch became active after the emergency door button was pressed.",
+    ),
+    (
+        EVENT_RELEASE_AT_STARTUP,
+        "The PLC's emergency-release latch was already active when sentinel started.",
+    ),
+    (
+        EVENT_RELEASE_CLEARED,
+        "The emergency-release latch was cleared. 'Open For' shows how long the latch had remained active.",
     ),
     (
         EVENT_STARTED,
@@ -588,6 +609,7 @@ class DoorEventRecorder:
         # (plc_id, tag) -> [opened_at, was_open_at_startup, plc_comm_lost_while_open]
         self._open: dict[tuple[str, str], list] = {}
         self._timer_done: dict[tuple[str, str], bool] = {}
+        self._release_active: dict[tuple[str, str], list] = {}
 
     def on_transition(
         self, plc_id: str, door: DoorConfig, is_open: bool, raw: bool, is_initial: bool
@@ -639,6 +661,44 @@ class DoorEventRecorder:
             plc=plc_id,
             duration_s=None if opened is None else self._clock() - opened[0],
             approximate=bool(opened and (opened[1] or opened[2])),
+        )
+
+    def on_release_transition(
+        self,
+        plc_id: str,
+        release: EmergencyReleaseConfig,
+        active: bool,
+        raw: bool,
+        initial: bool,
+    ) -> None:
+        key = (plc_id, release.tag)
+        if initial and not active:
+            return
+        duration: float | None = None
+        approximate = False
+        if active:
+            self._release_active[key] = [self._clock(), initial]
+            event = EVENT_RELEASE_AT_STARTUP if initial else EVENT_RELEASE
+        else:
+            activated = self._release_active.pop(key, None)
+            if activated is not None:
+                duration = self._clock() - activated[0]
+                approximate = bool(activated[1])
+            event = EVENT_RELEASE_CLEARED
+        self._log.log_event(
+            airlock=release.airlock,
+            door=release.object_name,
+            event=event,
+            tag=release.tag,
+            raw_value=raw,
+            plc=plc_id,
+            duration_s=duration,
+            approximate=approximate,
+            detail=(
+                "PLC emergency-release latch active"
+                if active
+                else "PLC emergency-release latch cleared"
+            ),
         )
 
     def on_started(self, version: str = "", fingerprint: str = "", clock: str = "") -> None:

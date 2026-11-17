@@ -137,7 +137,9 @@ def test_nightly_run_saves_state_and_one_weekly_report(tmp_path):
     assert len(summary["reports"]) == 1
     report = Path(summary["reports"][0])
     assert report.name == "ML-Report-19FEB2026.xlsx" and report.parent == report_directory(config)
-    assert load_workbook(report).sheetnames == ["Summary", "Findings", "Door baselines", "How to read"]
+    assert load_workbook(report).sheetnames == [
+        "Summary", "Findings", "Door baselines", "Emergency releases", "How to read"
+    ]
     assert (ml_directory(config) / "history.csv").exists() and (ml_directory(config) / "model_info.json").exists()
 
     assert run_learning(config, now=now + timedelta(hours=3))["reports"] == []  # not due again yet
@@ -163,3 +165,32 @@ def test_cockpit_reads_learning_state_and_marks_flagged_doors(tmp_path):
     flagged = {d["name"]: d["ml"] for d in board.snapshot()["doors"]}
     assert flagged[door] == ["watch: Open times have drifted longer"]
     assert sum(1 for v in flagged.values() if v) == 1
+
+
+def test_emergency_release_burst_is_kept_out_of_door_statistics_and_flagged(tmp_path):
+    ledger = build_ledger(tmp_path, 40)
+    release = "EMERGENCY_RELEASE_N1065"
+    for offset in (0, 1, 2):
+        _add(
+            ledger,
+            datetime.combine(START + timedelta(days=39), time(10, offset)),
+            release,
+            "EMERGENCY RELEASE ACTIVATED",
+            airlock="N1065",
+        )
+    now = datetime.combine(START + timedelta(days=40), time(2, 30))
+    dataset = load_dataset(
+        ledger.path,
+        now,
+        release_names={release: "N1065"},
+    )
+    assert release not in dataset.doors
+    result = analyze(dataset, START + timedelta(days=40), now, 180)
+    assert result.progress["release_points"] == 1
+    baseline = result.release_baselines[0]
+    assert baseline["activations_30d"] == 3
+    assert any(
+        finding["door"] == release
+        and finding["kind"] in {"emergency_release_burst", "unusual_release_pattern"}
+        for finding in result.findings
+    )

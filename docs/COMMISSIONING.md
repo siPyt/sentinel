@@ -43,7 +43,16 @@ Do this *before* connecting anything on the BACnet side.
          confirm against the physical door every time.
 4. Note the `LAT(ms)` CIP read latency for each PLC under normal conditions as a
    baseline (useful later for diagnosing network degradation).
-5. Sign-off: all doors show correct, responsive, non-faulted raw/inverted state.
+5. For **each emergency-release point**, use the site's approved controlled test
+   procedure and coordinate with operations before pressing the button:
+   - [ ] The direct `Local:11:I.Data.x` row reads `PRESSED` while the input is active.
+   - [ ] The corresponding `Emergency_Release_Latch` row changes from `clear` to `ACTIVE`.
+   - [ ] Release/reset the PLC latch as designed and confirm it returns to `clear`.
+   - [ ] The cockpit shows one activation/clear pair in Recent events and the latch
+         tile does not remain active after the controlled reset.
+   - [ ] Do not use `--plc-test` as an authorization to bypass an airlock interlock or
+         operate life-safety controls; this is monitoring only.
+6. Sign-off: all doors and emergency releases show correct, responsive, non-faulted state.
    - [ ] ______________________ (initials/date)
 
 ## Phase 2 -- Fault handling verification (southbound)

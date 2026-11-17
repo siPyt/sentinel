@@ -54,3 +54,57 @@ Validate `config.yaml` at startup with `pydantic` v2:
 2. Complete, production-ready code for `config.py`, `plc_poller.py`, `state_manager.py`, `bacnet_server.py`, and `main.py` (run blocking `pylogix` calls inside `asyncio.to_thread` or a dedicated thread pool so the async `bacpypes3` event loop never blocks).
 3. Hardened `systemd` unit file (`airlock-sentinel.service`) running as a non-root user with automatic restart.
 4. Step-by-step commissioning checklist (testing PLC reads via `--plc-test` and verifying BACnet points/COV via YABE).
+
+## 7. Machine Learning and Advisory Diagnostics
+The learning job is read-only and runs separately from the PLC polling service.
+It must read the tamper-evident ledger and must never write to the door event log,
+change an alarm, operate an interlock, or issue a PLC write. Stopped, crashed, and
+PLC-offline periods are excluded from training.
+
+### Door learning schedule
+- **Day 14:** Baselines for weekday/weekend openings, typical and 95th-percentile
+  open duration, timeout share, chatter, interlocks, and night use.
+- **Day 30:** Isolation Forest anomaly detection using door-specific robust
+  z-scores for openings, open durations, timeout share, chatter, interlocks, and
+  night use; plus an EWMA drift watch for open-time movement.
+- **Day 60:** Theil-Sen trends with Kendall significance tests for open time and
+  timeout rate, sister-door comparisons, and unusual site traffic by weekday/hour.
+
+These methods can detect:
+- Door-open times becoming unexpectedly longer or shorter.
+- Rising openings, timeouts, chatter, or interlock frequency.
+- Unusual combinations of multiple door conditions.
+- A door degrading relative to its sister doors.
+- Progressive closer, hinge, latch, seal, alignment, obstruction, switch, or
+  wiring problems.
+- Traffic and operating-pattern changes during work, cleaning, maintenance,
+  transfers, shifts, or nighttime hours.
+
+### Emergency-release learning
+Each configured emergency-release latch is learned separately from normal door
+traffic. Inputs include daily activations, rolling seven-day activations, elapsed
+days since activation, active-day indication, and night-use share. A separate
+Isolation Forest and a robust sparse-event burst detector identify:
+- Multiple activations in one day.
+- Several activations unusually close together.
+- Rising seven-day counts.
+- Unusual-time or repeated nighttime use.
+- Long inactivity followed by repeated use.
+
+Useful causes to investigate include legitimate emergency/maintenance operation,
+sticky or bouncing button contacts, intermittent wiring, PLC latch-reset behavior,
+associated interlock/door behavior, and workflow changes.
+
+### Cockpit diagnostics
+Flagged tiles with poor health, ML findings, interlocks, chatter, timeouts, unknown
+states, or active emergency releases are double-clickable. The first view is limited
+to the current condition, most likely causes, and recommended checks. ML evidence,
+related events, and raw PLC tags are collapsed under optional detail sections.
+Weekly reports contain separate door baselines and emergency-release baselines.
+
+### Current limits
+- Findings are advisory and cannot prove a physical root cause.
+- No remaining-life or "failure in X days" model is included.
+- No automatic root-cause classification or safety action is included.
+- Learning requires monitored history and cannot collect useful new observations
+  while the PLC is offline.
